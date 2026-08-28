@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aeon-mud"
+version = "0.1.0"
+description = "Standalone line-oriented Telnet client for MUD sessions."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+aeon-mud = "aeon_mud_client:main"
+
+[tool.setuptools]
+py-modules = ["aeon_mud_client"]

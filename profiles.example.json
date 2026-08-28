@@ -1,0 +1,30 @@
+{
+  "profiles": {
+    "local-mud": {
+      "allow_plaintext": true,
+      "auto_login": false,
+      "expected_banner": "(?im)(username|name|login|connect)",
+      "host": "127.0.0.1",
+      "port": 4000,
+      "require_private_host": true,
+      "terminal_type": "ANSI",
+      "transcript": "off"
+    },
+    "ssh-wrapped-mud": {
+      "allow_plaintext": true,
+      "auto_login": false,
+      "expected_banner": "(?im)(username|name|login|connect)",
+      "host": "127.0.0.1",
+      "port": 4000,
+      "proxy_command": [
+        "ssh",
+        "-W",
+        "127.0.0.1:4000",
+        "example-bastion"
+      ],
+      "require_private_host": true,
+      "terminal_type": "ANSI",
+      "transcript": "off"
+    }
+  }
+}
