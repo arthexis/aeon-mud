@@ -19,3 +19,9 @@ profiles.json
 known_hosts.json
 history.json
 secrets.json
+
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
