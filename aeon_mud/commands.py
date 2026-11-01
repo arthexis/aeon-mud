@@ -13,6 +13,17 @@ from .transcript import Transcript
 if TYPE_CHECKING:
     from .session import SessionController
 
+def append_client_event(transcript: Transcript, ui: MudUi, message: str) -> None:
+    plain = f"[client] {message}\n"
+    transcript.write("recv", plain)
+    ui.append_output(f"\x1b[33m{plain}\x1b[0m")
+
+
+def confirm_local_command(transcript: Transcript, ui: MudUi, message: str) -> None:
+    ui.set_status(message)
+    append_client_event(transcript, ui, message)
+
+
 def resolve_session_profile_path(destination: str) -> Path:
     raw = strip_outer_quotes(destination)
     if not raw:
