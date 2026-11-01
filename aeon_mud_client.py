@@ -2846,15 +2846,45 @@ def command_profile_add(args: argparse.Namespace) -> None:
     print(f"Saved profile {profile.name} in {profile_path()}")
 
 
+def resolve_secret_profile(name: str) -> Profile:
+    store = ProfileStore()
+    if name in store.data["profiles"]:
+        return store.get(name)
+    profile = store.find_host(name)
+    if profile is None and "." not in name and ":" not in name:
+        profile = store.find_host(name, short=True)
+    if profile is None:
+        raise SystemExit(f"Profile not found or ambiguous host alias: {name}")
+    return profile
+
+
 def command_secret_set(args: argparse.Namespace) -> None:
     if not Dpapi.available():
         raise SystemExit("Stored secrets require Windows DPAPI")
+    if args.character:
+        profile = resolve_secret_profile(args.profile)
+        character = validate_character_name(args.character)
+        password = args.password or getpass.getpass(f"Password for {character} on {profile.host}: ")
+        if not password or "\\r" in password or "\\n" in password:
+            raise SystemExit("Password must not be empty or contain a newline")
+        SecretStore().set_password(character_secret_key(profile, character), password)
+        if character not in profile.characters:
+            profile.characters.append(character)
+            ProfileStore().set(profile)
+        print(f"Stored encrypted password for {character} on {profile.host}")
+        return
     password = args.password or getpass.getpass(f"Password for {args.profile}: ")
     SecretStore().set_password(args.profile, password)
     print(f"Stored DPAPI-protected password for {args.profile}")
 
 
 def command_secret_clear(args: argparse.Namespace) -> None:
+    if args.character:
+        profile = resolve_secret_profile(args.profile)
+        character = validate_character_name(args.character)
+        SecretStore().clear_password(character_secret_key(profile, character))
+        print(f"Cleared saved password for {character} on {profile.host}")
+        return
     SecretStore().clear_password(args.profile)
     print(f"Cleared password for {args.profile}")
 
@@ -3260,10 +3290,12 @@ def build_parser() -> argparse.ArgumentParser:
     secret_sub = secret.add_subparsers(dest="secret_command", required=True)
     secret_set = secret_sub.add_parser("set", help="store a password")
     secret_set.add_argument("profile")
+    secret_set.add_argument("--character", help="character on this server (use with --login)")
     secret_set.add_argument("--password", help="avoid this on shared shells; omit to prompt")
     secret_set.set_defaults(func=command_secret_set)
     secret_clear = secret_sub.add_parser("clear", help="remove a stored password")
     secret_clear.add_argument("profile")
+    secret_clear.add_argument("--character", help="clear only this character's password")
     secret_clear.set_defaults(func=command_secret_clear)
 
     history = subparsers.add_parser("history", help="manage command history")
