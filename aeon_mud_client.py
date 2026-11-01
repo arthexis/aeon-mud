@@ -2635,7 +2635,7 @@ def command_self_test(_args: argparse.Namespace) -> None:
 
     # Fragmentation must not leak terminal controls or corrupt UTF-8.
     for split in range(1, len(b"hello\x1b]52;c;secret\x1b\\world")):
-        payload = b"hello\x1b]52;c;secret\x1b\\\\world"
+        payload = b"hello\x1b]52;c;secret\x1b\\world"
         dec = TerminalStreamDecoder("utf-8")
         assert dec.feed(payload[:split]) + dec.feed(payload[split:]) == "helloworld"
     dec = TerminalStreamDecoder("utf-8")
