@@ -7,7 +7,8 @@ if ($args.Count -eq 0) {
     exit 2
 }
 
-$python = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue
+# Get-Command can return multiple installations; select exactly one executable.
+$python = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $python) {
     Write-Host "Python is required. Install Python and make python.exe available in PATH." -ForegroundColor Red
     exit 1
@@ -67,10 +68,21 @@ if (-not (Test-Path -LiteralPath $client -PathType Leaf)) {
     exit 1
 }
 
+$sessionScript = Join-Path $PSScriptRoot "aeon-mud-wezterm-session.ps1"
+if (-not (Test-Path -LiteralPath $sessionScript -PathType Leaf)) {
+    Write-Host "Aeon MUD session wrapper not found: $sessionScript" -ForegroundColor Red
+    exit 1
+}
+
+# Set paths in the child environment rather than relying on Windows -File
+# positional argument binding. The remaining arguments are all client options.
+$env:AEON_MUD_PYTHON_PATH = $python.Source
+$env:AEON_MUD_SCRIPT_PATH = $client
 Write-Host "Launching Aeon MUD in WezTerm..."
 Write-Host "WezTerm: $wezterm"
 try {
-    & $wezterm start --cwd $PSScriptRoot -- $python.Source $client @args
+    # -NoExit keeps the pane open even when Python exits before displaying its error.
+    & $wezterm start --cwd $PSScriptRoot -- powershell.exe -NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File $sessionScript @args
     $launchCode = $LASTEXITCODE
 } catch {
     Write-Host "WezTerm launch failed: $_" -ForegroundColor Red
