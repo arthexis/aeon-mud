@@ -10,7 +10,7 @@ from aeon_mud import cli, session
 
 class InterruptTests(unittest.TestCase):
     def test_ctrl_c_at_cli_boundary_has_no_traceback(self):
-        with mock.patch.object(cli, "build_parser" as parser:
+        with mock.patch.object(cli, "build_parser") as parser:
             parser.return_value.parse_args.return_value.func.side_effect = KeyboardInterrupt
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
