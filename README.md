@@ -146,6 +146,17 @@ decryption is tied to the current Windows user/machine, so copying files to
 another computer will not automatically recover credentials. On other
 platforms the password is prompted each time rather than saved insecurely.
 
+To replace or clear one character's saved password without affecting other
+characters, use:
+
+```powershell
+.\aeon-mud.bat secret set tapestries --character Merlin
+.\aeon-mud.bat secret clear tapestries --character Merlin
+```
+
+Omit `--password` to enter a replacement without exposing it in PowerShell
+history. After clearing, the next `--login Merlin` prompts again.
+
 The login command is redacted from command history and transcripts, but
 **Telnet itself is unencrypted**: the server, network intermediaries, or
 another party observing the connection can still see the password. Use this
