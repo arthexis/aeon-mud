@@ -98,7 +98,7 @@ class CharacterLoginTests(unittest.TestCase):
                 mud.session_loop(profile, args, on_connected=profile_store.set)
                 self.assertEqual(secret_store.get_password(key), "swordfish")
                 self.assertEqual(profile_store.get(profile.name).characters, ["Merlin"])
-                transport.sendall.assert_called_with(b"connect Merlin swordfish\\r\\n")
+                transport.sendall.assert_called_with(b"connect Merlin swordfish\r\n")
                 self.assertEqual(prompt.call_count, 1)
                 mud.session_loop(profile_store.get(profile.name), args)
                 self.assertEqual(prompt.call_count, 1)
