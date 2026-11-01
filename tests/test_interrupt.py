@@ -1,0 +1,62 @@
+"""Regression tests for clean CLI interruption and session cleanup."""
+import contextlib
+import io
+import unittest
+from unittest import mock
+
+import aeon_mud_client as mud
+
+
+class InterruptTests(unittest.TestCase):
+    def test_ctrl_c_at_cli_boundary_has_no_traceback(self):
+        with mock.patch.object(mud, "command_paths", side_effect=KeyboardInterrupt):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = mud.main(["paths"])
+        self.assertEqual(status, 130)
+        self.assertEqual(output.getvalue(), "\nDisconnected (Ctrl+C).\n")
+
+    def test_ctrl_c_in_keyboard_loop_closes_everything(self):
+        transport = mock.MagicMock(spec=mud.Transport)
+        reader = mock.MagicMock(spec=mud.KeyReader)
+        reader.read_key.side_effect = KeyboardInterrupt
+        ui = mock.MagicMock(spec=mud.MudUi)
+        ui.started = True
+        transcript = mock.MagicMock(spec=mud.Transcript)
+        transcript.path = None
+
+        with (
+            mock.patch.object(mud, "is_private_target", return_value=True),
+            mock.patch.object(mud, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
+            mock.patch.object(mud, "run_sanity_checks"),
+            mock.patch.object(mud, "KeyReader", return_value=reader),
+            mock.patch.object(mud, "MudUi", return_value=ui),
+            mock.patch.object(mud, "Transcript", return_value=transcript),
+            mock.patch.object(mud.threading, "Thread") as receiver,
+        ):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = mud.main(["connect", "--host", "127.0.0.1", "--allow-plaintext"])
+        self.assertEqual(status, 130)
+        self.assertIn("Disconnected (Ctrl+C).", output.getvalue())
+        transport.close.assert_called_once()
+        reader.close.assert_called_once()
+        ui.close.assert_called_once()
+        receiver.return_value.start.assert_called_once()
+
+    def test_ctrl_c_while_validating_closes_socket(self):
+        transport = mock.MagicMock(spec=mud.Transport)
+        with (
+            mock.patch.object(mud, "is_private_target", return_value=True),
+            mock.patch.object(mud, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
+            mock.patch.object(mud, "run_sanity_checks", side_effect=KeyboardInterrupt),
+        ):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = mud.main(["connect", "--host", "127.0.0.1", "--allow-plaintext"])
+        self.assertEqual(status, 130)
+        transport.close.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()
