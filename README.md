@@ -58,6 +58,12 @@ path, its launch status and any CLI errors. You can override executable
 discovery with `$env:AEON_WEZTERM_PATH = "C:\\Program Files\\WezTerm\\wezterm.exe"`.
 WezTerm's CLI delegates to its GUI executable and surfaces useful errors.
 
+The GUI launcher starts Aeon MUD inside a PowerShell session that **stays
+open when the Python client exits**, so connection errors and tracebacks remain
+visible. After the client exits, read the diagnostic and close the WezTerm
+window/tab manually. This is intentional; it also permits troubleshooting
+when a session ends immediately after startup.
+
 For direct PowerShell use, invoke `aeon-mud-wezterm.ps1` with the same arguments.
 All network and plaintext-consent behavior remains in the Python client.
 WezTerm provides the window, tabs, fonts and terminal emulation; Aeon MUD still
