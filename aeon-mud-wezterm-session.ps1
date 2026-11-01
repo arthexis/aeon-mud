@@ -13,7 +13,7 @@ if ($args.Count -gt 2) {
     $clientArguments = @($args[2..($args.Count - 1)])
 }
 
-Write-Host "Aeon MUD — terminal session"
+Write-Host "Aeon MUD terminal session"
 try {
     & $pythonPath $clientPath @clientArguments
     $clientCode = $LASTEXITCODE
