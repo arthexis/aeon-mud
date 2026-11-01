@@ -124,6 +124,33 @@ directory. Use `aeon-mud.bat profile list` to inspect or
 `aeon-mud.bat profile remove NAME` to forget one. Telnet remains unencrypted;
 remembering permission is a convenience, not identity verification.
 
+### WezTerm tab titles and character login
+
+WezTerm's tab shows the connection hostname instead of `python.exe`. When
+a character is selected, the title becomes `<server> (<character>)`.
+
+```powershell
+.\aeon-mud-wezterm.bat connect tapestries --login Merlin
+.\aeon-mud-wezterm.bat connect tapestries --login Gandalf
+```
+
+The first use of `--login CHARACTER` prompts for the password without
+echoing it. After connection, the client sends a single MUD command
+`connect CHARACTER PASSWORD`. Future launches for that character reuse its
+saved password; each server profile can remember multiple character names.
+
+On Windows, passwords are **reversibly encrypted with Windows DPAPI** in the
+existing `secrets.json` file, keyed by server hostname, port and character.
+Only character names (not passwords) appear in `profiles.json`. DPAPI
+decryption is tied to the current Windows user/machine, so copying files to
+another computer will not automatically recover credentials. On other
+platforms the password is prompted each time rather than saved insecurely.
+
+The login command is redacted from command history and transcripts, but
+**Telnet itself is unencrypted**: the server, network intermediaries, or
+another party observing the connection can still see the password. Use this
+feature only on servers you trust, preferably over a secure tunnel.
+
 ## Controls
 
 Two unlabeled input composers are shown at the bottom, each with a simple `>`
