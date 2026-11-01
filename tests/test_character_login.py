@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import aeon_mud_client as mud
-from aeon_mud import session
+from aeon_mud import cli, session
 
 
 class CharacterLoginTests(unittest.TestCase):
@@ -125,8 +125,8 @@ class CharacterLoginTests(unittest.TestCase):
                 ["secret", "clear", "tapestries", "--character", "Merlin"]
             )
             with (
-                mock.patch.object(mud, "ProfileStore", return_value=profile_store),
-                mock.patch.object(mud, "SecretStore", return_value=store),
+                mock.patch.object(cli, "ProfileStore", return_value=profile_store),
+                mock.patch.object(cli, "SecretStore", return_value=store),
                 mock.patch.object(mud.Dpapi, "available", return_value=True),
                 mock.patch.object(mud.Dpapi, "protect", side_effect=lambda data: b"sealed:" + data),
                 mock.patch.object(mud.Dpapi, "unprotect", side_effect=lambda data: data.split(b":", 1)[1]),
