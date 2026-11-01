@@ -78,6 +78,24 @@ The interactive client is now divided into four additional package modules:
 compatibility re-exports. Launcher arguments, profile locations, encrypted
 credentials and the MUD protocol remain unchanged.
 
+## Package architecture — Increment 4
+
+The package is the authoritative implementation. The CLI commands, parser,
+and built-in self-test now live in `aeon_mud.cli`, alongside the existing
+`aeon_mud.session`, `terminal`, `input`, `commands`, and infrastructure modules.
+
+`aeon_mud_client.py` is a small compatibility entry point (under 60 lines),
+re-exporting the previous names. Existing Windows/Linux/WezTerm launchers,
+`python -m aeon_mud`, and the installed `aeon-mud` console script all use
+the same CLI implementation. No persistence format, credential, protocol or
+runtime dependency changes are part of this final extraction.
+
+The test suite now checks for circular package imports, unintended imports
+of the legacy wrapper from package modules, and equivalent CLI help across
+entry points. Runtime regression tests continue to cover host consent,
+initial Telnet negotiation, first-command handling, auto-login, reconnects
+and the terminal's independent input buffers.
+
 ## Optional WezTerm GUI launcher (Windows)
 
 [WezTerm](https://wezterm.org/) is an **optional** terminal GUI host. The client
