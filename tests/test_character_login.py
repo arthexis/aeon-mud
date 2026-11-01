@@ -86,13 +86,21 @@ class CharacterLoginTests(unittest.TestCase):
                 mock.patch.object(mud, "SecretStore", return_value=secret_store),
                 mock.patch.object(mud.getpass, "getpass", return_value="swordfish") as prompt,
                 mock.patch.object(mud, "open_session_transport",
-                                  return_value=(transport, mud.TelnetCodec(), "")),
+                                  return_value=(transport, mud.TelnetCodec(), "ready")),
                 mock.patch.object(mud, "run_sanity_checks"),
                 mock.patch.object(mud, "KeyReader") as reader,
                 mock.patch.object(mud, "MudUi"),
                 mock.patch.object(mud, "Transcript"),
-                mock.patch.object(mud.threading, "Thread"),
+                mock.patch.object(mud.threading, "Thread") as thread,
             ):
+                # Run the deferred login worker synchronously, without
+                # starting the mocked receiver loop.
+                def start_worker(target, args=(), **kwargs):
+                    instance = mock.Mock()
+                    if target is mud.send_character_login_after_ready:
+                        instance.start.side_effect = lambda: target(*args)
+                    return instance
+                thread.side_effect = start_worker
                 reader.return_value.read_key.return_value = mud.Key("quit")
                 args = self.args("--login", "Merlin")
                 mud.session_loop(profile, args, on_connected=profile_store.set)
