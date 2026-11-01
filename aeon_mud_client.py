@@ -1674,6 +1674,13 @@ class MudUi:
 
     def set_secret_entry(self, value: bool) -> None:
         with self.lock:
+            if value and self.active_input != 0:
+                # Keep password entry in the primary buffer, preserving both drafts.
+                self.input_buffer, self.other_input_buffer = self.other_input_buffer, self.input_buffer
+                self.cursor, self.other_cursor = self.other_cursor, self.cursor
+                self.history_index, self.other_history_index = self.other_history_index, self.history_index
+                self.history_draft, self.other_history_draft = self.other_history_draft, self.history_draft
+                self.active_input = 0
             self.secret_entry = value
             self.render()
 
@@ -1858,6 +1865,9 @@ class MudUi:
             self.render()
 
     def clear_input(self) -> None:
+        with self.lock:
+            self.history_index = None
+            self.history_draft = ""
         self.replace_input("")
 
     def backspace(self) -> None:
