@@ -1621,6 +1621,11 @@ class MudUi:
                     sys.stdout.write("\x1b[?1049l")
                 sys.stdout.flush()
             self.started = False
+            if self.original_stdout_mode is not None and os.name == "nt":
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.GetStdHandle(-11)
+                kernel32.SetConsoleMode(handle, self.original_stdout_mode)
+                self.original_stdout_mode = None
 
     def _enable_vt(self) -> None:
         if os.name != "nt":
@@ -2390,7 +2395,7 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
         raise SystemExit(f"Could not connect to {connection_target_label(profile)}: {exc}") from exc
     try:
         run_sanity_checks(profile, initial_banner, args.accept_host_change, args.yes)
-    except Exception:
+    except BaseException:
         transport.close()
         raise
 
