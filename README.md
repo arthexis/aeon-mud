@@ -126,11 +126,18 @@ remembering permission is a convenience, not identity verification.
 
 ## Controls
 
+The top status bar stays compact by default, showing connection information
+and `F1 help`. Press **F1** to expand the bar into a multi-line keyboard
+shortcut reference, and press **F1** again to collapse it. The expanded help
+uses available space without covering the two input prompts or the entire MUD
+output; it adapts when the terminal is resized.
+
 Two unlabeled input composers are shown at the bottom, each with a simple `>`
 prompt. The terminal cursor identifies the active composer. Each remembers its
 own draft, cursor location, and history-navigation position. Sending a command
 clears **only the active composer**; the other draft stays untouched.
 
+- `F1`: expand/collapse the full help bar
 - `Tab`: switch active composer
 - `Ctrl+Left` / `Ctrl+Right`: move one word in the active composer
 - `Ctrl+K`: delete from the cursor to the end of that composer
