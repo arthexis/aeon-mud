@@ -1416,8 +1416,10 @@ def key_from_control_char(char: str) -> Key:
         return Key("paste")
     if char == "\x0e":
         return Key("newline")
+    if char == "\x0b":
+        return Key("delete_to_end")
     if char == "\t":
-        return Key("char", "    ")
+        return Key("switch_input")
     if char >= " ":
         return Key("char", char)
     return Key(f"control:{ord(char)}")
@@ -1608,6 +1610,14 @@ class MudUi:
         self.cursor = 0
         self.history = HistoryStore().list_for(profile)
         self.history_index: int | None = None
+        # The active composer uses the existing fields; the inactive composer
+        # has independent draft, cursor, and history navigation state.
+        self.active_input = 0
+        self.other_input_buffer = ""
+        self.other_cursor = 0
+        self.other_history_index: int | None = None
+        self.history_draft = ""
+        self.other_history_draft = ""
         self.scroll_offset = 0
         self.status_message = ""
         self.modal_message = ""
@@ -1754,15 +1764,69 @@ class MudUi:
         self._display_cache_rows = rows or [""]
         return self._display_cache_rows
 
+    @staticmethod
+    def _visible_input_rows(layout: InputLayout, limit: int) -> tuple[list[str], int]:
+        if len(layout.rows) <= limit:
+            return layout.rows, layout.cursor_row
+        start = min(max(0, layout.cursor_row - limit + 1), len(layout.rows) - limit)
+        return layout.rows[start : start + limit], layout.cursor_row - start
+
     def _input_window(self, width: int, height: int) -> tuple[list[str], int, int]:
-        prompt = "secret> " if self.secret_entry else "> "
-        layout = layout_input_buffer(self.input_buffer, self.cursor, width, prompt, self.secret_entry)
-        max_rows = max(1, min(8, height - 4))
-        if len(layout.rows) <= max_rows:
-            return layout.rows, layout.cursor_row, layout.cursor_col
-        start = min(max(0, layout.cursor_row - max_rows + 1), len(layout.rows) - max_rows)
-        rows = layout.rows[start : start + max_rows]
-        return rows, layout.cursor_row - start, layout.cursor_col
+        # Both input fields use the same bare prompt; focus is shown by the
+        # terminal cursor, without labels or a separator row.
+        # Prevent a small terminal from consuming all output space.
+        max_rows = max(2, min(8, height - 2))
+        active_limit = max(1, max_rows // 2)
+        other_limit = max(1, max_rows - active_limit)
+        active = layout_input_buffer(
+            self.input_buffer, self.cursor, width, "> ", self.secret_entry,
+        )
+        inactive = layout_input_buffer(
+            self.other_input_buffer, self.other_cursor, width, "> ",
+            self.secret_entry,
+        )
+        active_rows, active_cursor_row = self._visible_input_rows(active, active_limit)
+        other_rows, other_cursor_row = self._visible_input_rows(inactive, other_limit)
+        if self.active_input == 0:
+            return active_rows + other_rows, active_cursor_row, active.cursor_col
+        return other_rows + active_rows, len(other_rows) + active_cursor_row, active.cursor_col
+
+    def switch_input(self) -> None:
+        with self.lock:
+            # Keep passwords in the primary composer; don't expose a draft
+            # while a secret prompt is being answered.
+            if self.secret_entry:
+                self.set_status("Switching inputs is disabled during secret entry")
+                return
+            self.input_buffer, self.other_input_buffer = self.other_input_buffer, self.input_buffer
+            self.cursor, self.other_cursor = self.other_cursor, self.cursor
+            self.history_index, self.other_history_index = self.other_history_index, self.history_index
+            self.history_draft, self.other_history_draft = self.other_history_draft, self.history_draft
+            self.active_input = 1 - self.active_input
+            self.render()
+
+    def delete_to_end(self) -> None:
+        with self.lock:
+            self.input_buffer = self.input_buffer[:self.cursor]
+            self.history_index = None
+            self.render()
+
+    def move_word(self, direction: int) -> None:
+        with self.lock:
+            text = self.input_buffer
+            pos = self.cursor
+            if direction < 0:
+                while pos > 0 and text[pos - 1].isspace():
+                    pos -= 1
+                while pos > 0 and not text[pos - 1].isspace():
+                    pos -= 1
+            else:
+                while pos < len(text) and not text[pos].isspace():
+                    pos += 1
+                while pos < len(text) and text[pos].isspace():
+                    pos += 1
+            self.cursor = pos
+            self.render()
 
     def scroll(self, amount: int) -> None:
         with self.lock:
@@ -1830,6 +1894,7 @@ class MudUi:
                 self.set_status("No command history for this profile")
                 return
             if self.history_index is None:
+                self.history_draft = self.input_buffer
                 self.history_index = len(self.history) - 1
             else:
                 self.history_index = max(0, self.history_index - 1)
@@ -1843,7 +1908,7 @@ class MudUi:
                 return
             if self.history_index >= len(self.history) - 1:
                 self.history_index = None
-                self.replace_input("")
+                self.replace_input(self.history_draft)
             else:
                 self.history_index += 1
                 self.replace_input(self.history[self.history_index])
@@ -1873,7 +1938,7 @@ class MudUi:
             f" {self.profile.label()} {self.profile.host}:{self.profile.port} "
             f"PLAINTEXT TELNET {connection} "
             f"log:{log_state} "
-            "UP/DOWN scroll CTRL+UP/DOWN history CTRL+N newline CTRL+V paste CTRL+] quit"
+            "TAB switch CTRL+LEFT/RIGHT words CTRL+K trim CTRL+UP/DOWN history CTRL+N newline CTRL+] quit"
         )
         if self.scroll_offset:
             status += f" scrollback:{self.scroll_offset}"
@@ -2471,6 +2536,14 @@ def session_loop(
                 ui.scroll(fast_page_scroll_amount(ui._body_height()))
             elif key.name == "page_down":
                 ui.scroll(-fast_page_scroll_amount(ui._body_height()))
+            elif key.name == "switch_input":
+                ui.switch_input()
+            elif key.name == "ctrl_left":
+                ui.move_word(-1)
+            elif key.name == "ctrl_right":
+                ui.move_word(1)
+            elif key.name == "delete_to_end":
+                ui.delete_to_end()
             elif key.name == "ctrl_up":
                 ui.history_prev()
             elif key.name == "ctrl_down":
@@ -2509,8 +2582,8 @@ def session_loop(
                 ui.bottom()
             elif key.name == "f5":
                 ui.set_status(
-                    "Keys: UP/DOWN scroll, PGUP/PGDN fast scroll, CTRL+UP/DOWN history, "
-                    "CTRL+N newline, CTRL+V paste, /log [file], /watch PATTERN COLOR, "
+                    "Keys: TAB switch buffer, CTRL+LEFT/RIGHT move words, CTRL+K delete to end, "
+                    "UP/DOWN scroll, CTRL+UP/DOWN history, CTRL+N newline, CTRL+V paste, "
                     "/save FILE, /load [FILE], CTRL+] quit"
                 )
             elif key.name == "newline":
