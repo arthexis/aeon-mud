@@ -677,12 +677,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def normalize_help_argv(argv: list[str]) -> list[str]:
+    """Accept help before or after a command, including nested subcommands.
+
+    Argparse supports --help after a command; translate aliases and leading
+    -h / --help into the same command-specific action.
+    """
+    help_tokens = {"help", "-h", "--help"}
+    if not any(token in help_tokens for token in argv):
+        return list(argv)
+    return [token for token in argv if token not in help_tokens] + ["--help"]
+
+
 def main(argv: list[str] | None = None) -> int:
-    # Support "help [subcommand ...]" in addition to argparse's -h/--help.
-    # A help request never starts an interactive session.
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments and arguments[0] == "help":
-        arguments = arguments[1:] + ["--help"]
+    arguments = normalize_help_argv(list(sys.argv[1:] if argv is None else argv))
     parser = build_parser()
     args = parser.parse_args(arguments)
     try:
