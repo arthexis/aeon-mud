@@ -126,11 +126,22 @@ remembering permission is a convenience, not identity verification.
 
 ## Controls
 
+Two unlabeled input composers are shown at the bottom, each with a simple `>`
+prompt. The terminal cursor identifies the active composer. Each remembers its
+own draft, cursor location, and history-navigation position. Sending a command
+clears **only the active composer**; the other draft stays untouched.
+
+- `Tab`: switch active composer
+- `Ctrl+Left` / `Ctrl+Right`: move one word in the active composer
+- `Ctrl+K`: delete from the cursor to the end of that composer
+- `Ctrl+A` / `Ctrl+E` (or `Home` / `End`): move to start/end
+- `Ctrl+U`: clear the active composer
+- `Ctrl+W`: delete the preceding word
 - `Up` / `Down`: scroll output
 - `PageUp` / `PageDown`: scroll by page
 - `Ctrl+Up` / `Ctrl+Down`: command history
 - `Ctrl+N`: insert a newline in the wrapped input composer
-- `Ctrl+V`: guarded paste with multi-line confirmation
+- `Ctrl+V`: guarded paste into the active composer (multi-line confirmation retained)
 - `/log [file]`: start logging to `output.log` or to the named file
 - `/watch pattern color`: colorize messages that start with `pattern`; `*` is a wildcard
 - `/save file` / `/load [file]`: save and restore session profile settings
