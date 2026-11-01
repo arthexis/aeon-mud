@@ -78,6 +78,7 @@ try {
 }
 if ($launchCode -ne 0) {
     Write-Host "WezTerm exited with code $launchCode. Try running '$wezterm start --help'." -ForegroundColor Red
-    exit $(if ($null -eq $launchCode) { 1 } else { $launchCode })
+    if ($null -eq $launchCode) { exit 1 }
+    exit $launchCode
 }
 Write-Host "WezTerm launch command completed. If no window opened, test 'wezterm.exe start' directly."
