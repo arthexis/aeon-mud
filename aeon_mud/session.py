@@ -307,17 +307,6 @@ class SessionController:
             return False
 
 
-def append_client_event(transcript: Transcript, ui: MudUi, message: str) -> None:
-    plain = f"[client] {message}\n"
-    transcript.write("recv", plain)
-    ui.append_output(f"\x1b[33m{plain}\x1b[0m")
-
-
-def confirm_local_command(transcript: Transcript, ui: MudUi, message: str) -> None:
-    ui.set_status(message)
-    append_client_event(transcript, ui, message)
-
-
 def sleep_until_stop(stop: threading.Event, seconds: float) -> bool:
     deadline = time.monotonic() + max(0.0, seconds)
     while not stop.is_set():
