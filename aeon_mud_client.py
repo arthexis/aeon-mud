@@ -1452,6 +1452,7 @@ def key_from_ansi_escape(sequence: str) -> Key:
         "4~": Key("end"),
         "5~": Key("page_up"),
         "6~": Key("page_down"),
+        "11~": Key("f1"),
         "15~": Key("f5"),
     }
     if code in simple:
@@ -1621,6 +1622,7 @@ class MudUi:
         self.scroll_offset = 0
         self.status_message = ""
         self.modal_message = ""
+        self.help_expanded = False
         self.secret_entry = False
         self.connected = True
         self.watch_rules: list[WatchRule] = []
@@ -1754,7 +1756,42 @@ class MudUi:
     def _body_height(self) -> int:
         width, height = shutil.get_terminal_size((100, 30))
         input_rows, _, _ = self._input_window(width, height)
-        return max(1, height - 1 - len(input_rows))
+        return max(1, height - len(self._header_rows(width, height, len(input_rows))) - len(input_rows))
+
+    def toggle_help(self) -> None:
+        with self.lock:
+            self.help_expanded = not self.help_expanded
+            self.render()
+
+    def _header_rows(self, width: int, height: int, input_count: int) -> list[str]:
+        connection = "connected" if self.connected else "disconnected"
+        log_state = "on" if self.profile.transcript != "off" else "off"
+        status = (
+            f" {self.profile.label()} {self.profile.host}:{self.profile.port} "
+            f"TELNET {connection} log:{log_state} F1 help"
+        )
+        if self.scroll_offset:
+            status += f" scroll:{self.scroll_offset}"
+        if self.status_message:
+            status += f" | {self.status_message}"
+        if self.modal_message:
+            status = f" {self.modal_message}"
+
+        rows = [status]
+        if self.help_expanded:
+            help_lines = [
+                " F1 close help | Tab switch input | Enter send | Ctrl+] quit",
+                " Arrows move cursor | Ctrl+Left/Right words | Home/End start/end",
+                " Ctrl+A/E start/end | Ctrl+W delete word | Ctrl+K delete to end",
+                " Ctrl+U clear | Ctrl+N newline | Ctrl+V paste (confirm multiline)",
+                " Up/Down scroll | PgUp/PgDn fast | Ctrl+Up/Down history",
+                " F2 log path | F3 repeat | F4 bottom | F5 quick hints",
+                " /log [file] | /watch PATTERN COLOR | /save FILE | /load [FILE]",
+            ]
+            # Always reserve one output line and the two command prompts.
+            available = max(0, height - input_count - 2)
+            rows.extend(help_lines[:available])
+        return rows
 
     def _display_lines(self, width: int) -> list[str]:
         if self._display_cache_width == width:
@@ -1934,7 +1971,8 @@ class MudUi:
             return
         width, height = shutil.get_terminal_size((100, 30))
         input_rows, input_cursor_row, input_cursor_col = self._input_window(width, height)
-        body_height = max(1, height - 1 - len(input_rows))
+        header_rows = self._header_rows(width, height, len(input_rows))
+        body_height = max(1, height - len(header_rows) - len(input_rows))
         display_lines = self._display_lines(width)
         max_offset = max(0, len(display_lines) - body_height)
         self.scroll_offset = min(self.scroll_offset, max_offset)
@@ -1942,26 +1980,11 @@ class MudUi:
         start = max(0, end - body_height)
         visible = display_lines[start:end]
 
-        connection = "connected" if self.connected else "disconnected"
-        log_state = "on" if self.profile.transcript != "off" else "off"
-        status = (
-            f" {self.profile.label()} {self.profile.host}:{self.profile.port} "
-            f"PLAINTEXT TELNET {connection} "
-            f"log:{log_state} "
-            "TAB switch CTRL+LEFT/RIGHT words CTRL+K trim CTRL+UP/DOWN history CTRL+N newline CTRL+] quit"
-        )
-        if self.scroll_offset:
-            status += f" scrollback:{self.scroll_offset}"
-        if self.status_message:
-            status += f" | {self.status_message}"
-        if self.modal_message:
-            status = f" {self.modal_message}"
-
         output = ["\x1b[?25l\x1b[H"]
         if full_clear:
             output.append("\x1b[2J")
-        output.append("\x1b[7m" + truncate_plain(status, width).ljust(width) + "\x1b[0m")
-        output.append("\n")
+        for header in header_rows:
+            output.append("\x1b[2K\x1b[7m" + truncate_plain(header, width).ljust(width) + "\x1b[0m\n")
 
         for line in visible:
             output.append("\x1b[2K" + truncate_ansi(line, width) + "\x1b[0m\n")
@@ -1972,7 +1995,7 @@ class MudUi:
             output.append("\x1b[2K" + truncate_plain(row, width))
             if index < len(input_rows) - 1:
                 output.append("\n")
-        cursor_line = 2 + body_height + input_cursor_row
+        cursor_line = len(header_rows) + 1 + body_height + input_cursor_row
         output.append(
             f"\x1b[{max(1, min(height, cursor_line))};{max(1, min(width, input_cursor_col))}H"
         )
@@ -2578,6 +2601,8 @@ def session_loop(
                 ui.delete_word()
             elif key.name == "paste":
                 handle_paste(ui, controller)
+            elif key.name == "f1":
+                ui.toggle_help()
             elif key.name == "f2":
                 ui.set_status(f"Log: {transcript.path or 'off'}")
             elif key.name == "f3":
