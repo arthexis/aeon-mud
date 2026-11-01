@@ -73,11 +73,15 @@ if (-not (Test-Path -LiteralPath $sessionScript -PathType Leaf)) {
     exit 1
 }
 
+# Set paths in the child environment rather than relying on Windows -File
+# positional argument binding. The remaining arguments are all client options.
+$env:AEON_MUD_PYTHON_PATH = $python.Source
+$env:AEON_MUD_SCRIPT_PATH = $client
 Write-Host "Launching Aeon MUD in WezTerm..."
 Write-Host "WezTerm: $wezterm"
 try {
     # -NoExit keeps the pane open even when Python exits before displaying its error.
-    & $wezterm start --cwd $PSScriptRoot -- powershell.exe -NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File $sessionScript $python.Source $client @args
+    & $wezterm start --cwd $PSScriptRoot -- powershell.exe -NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File $sessionScript @args
     $launchCode = $LASTEXITCODE
 } catch {
     Write-Host "WezTerm launch failed: $_" -ForegroundColor Red
