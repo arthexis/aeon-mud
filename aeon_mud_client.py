@@ -207,6 +207,7 @@ class Profile:
     port: int = DEFAULT_PORT
     allow_plaintext: bool = False
     require_private_host: bool = True
+    approved_public_endpoint: str = ""
     expected_banner: str = ""
     username: str = ""
     auto_login: bool = False
@@ -275,6 +276,24 @@ class ProfileStore:
     def set(self, profile: Profile) -> None:
         self.data["profiles"][profile.name] = profile.to_stored_dict()
         self.save()
+
+    def find_host(self, host: str, port: int | None = None) -> Profile | None:
+        """Resolve saved hostnames case-insensitively; never choose ambiguously."""
+        normalized = host.rstrip(".").casefold()
+        matches = [
+            self.get(name) for name in self.names()
+            if self.data["profiles"][name].get("host", "").rstrip(".").casefold() == normalized
+        ]
+        if port is not None:
+            matches = [item for item in matches if item.port == port]
+        return matches[0] if len(matches) == 1 else None
+
+    def auto_profile_name(self, host: str, port: int) -> str:
+        normalized = host.rstrip(".").casefold()
+        # Never overwrite a user-created profile with the same name.
+        if normalized not in self.data["profiles"]:
+            return normalized
+        return f"{normalized}:{port}"
 
     def remove(self, name: str) -> None:
         if name not in self.data["profiles"]:
@@ -2366,20 +2385,28 @@ def send_composed_input(
     return True
 
 
-def session_loop(profile: Profile, args: argparse.Namespace) -> None:
+def session_loop(
+    profile: Profile, args: argparse.Namespace,
+    on_connected: Callable[[Profile], None] | None = None,
+) -> None:
     if not profile.allow_plaintext:
         raise SystemExit("Refusing plaintext Telnet until --allow-plaintext is set on the profile or command.")
     private_peer_required = False
+    public_approval_given = False
     if profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
         private_peer_required = is_private_target(profile.host)
         if not private_peer_required:
-            ok = prompt_yes_no(
-                f"{profile.host} does not resolve only to private/link-local addresses. Continue with plaintext Telnet?",
-                default=False,
-                assume_yes=args.yes,
-            )
-            if not ok:
-                raise SystemExit("Connection aborted by private-host policy")
+            # Approval is for this exact host and TCP port, not the domain suffix.
+            endpoint = f"{profile.host.rstrip('.').casefold()}:{profile.port}"
+            if profile.approved_public_endpoint != endpoint:
+                ok = prompt_yes_no(
+                    f"{profile.host} does not resolve only to private/link-local addresses. Continue with plaintext Telnet?",
+                    default=False,
+                    assume_yes=args.yes,
+                )
+                if not ok:
+                    raise SystemExit("Connection aborted by private-host policy")
+                public_approval_given = True
 
     password: str | None = None
     if profile.auto_login:
@@ -2395,6 +2422,10 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
         raise SystemExit(f"Could not connect to {connection_target_label(profile)}: {exc}") from exc
     try:
         run_sanity_checks(profile, initial_banner, args.accept_host_change, args.yes)
+        if public_approval_given:
+            profile.approved_public_endpoint = f"{profile.host.rstrip('.').casefold()}:{profile.port}"
+        if on_connected is not None:
+            on_connected(profile)
     except BaseException:
         transport.close()
         raise
@@ -2556,20 +2587,42 @@ def apply_connect_overrides(profile: Profile, args: argparse.Namespace) -> Profi
     return profile
 
 
-def profile_from_args(args: argparse.Namespace) -> Profile:
-    store = ProfileStore()
+def profile_from_args(args: argparse.Namespace, store: ProfileStore | None = None) -> Profile:
+    store = store or ProfileStore()
     if args.profile:
-        profile = store.get(args.profile)
+        if args.profile in store.data["profiles"]:
+            profile = store.get(args.profile)
+        else:
+            # A unique hostname can also access a saved profile by FQDN.
+            profile = store.find_host(args.profile)
+            if profile is None:
+                raise SystemExit(f"Profile not found: {args.profile}")
     else:
         if not args.host:
             raise SystemExit("connect requires a profile name or --host")
-        profile = Profile(name=DEFAULT_PROFILE, host=args.host, port=args.port or DEFAULT_PORT)
+        try:
+            host, port = normalize_host_port(args.host, args.port, explicit_port=args.port is not None)
+        except HostPortError as exc:
+            raise SystemExit(str(exc)) from exc
+        profile = store.find_host(host, port if args.port is not None or ":" in args.host else None)
+        if profile is None:
+            name = store.auto_profile_name(host, port)
+            profile = Profile(name=name, host=host, port=port)
+            # Prevent overwriting an existing profile when hostname and port collide.
+            if name in store.data["profiles"]:
+                profile.name = f"{name}:auto"
     return apply_connect_overrides(profile, args)
 
 
 def command_connect(args: argparse.Namespace) -> None:
-    profile = profile_from_args(args)
-    session_loop(profile, args)
+    store = ProfileStore()
+    profile = profile_from_args(args, store)
+    # Successful connections persist their hostname profile and public endpoint
+    # approval; failed/refused connections never grant trust or save a profile.
+    def remember(connected: Profile) -> None:
+        store.set(connected)
+
+    session_loop(profile, args, on_connected=remember)
 
 
 def command_profile_list(_args: argparse.Namespace) -> None:
