@@ -2135,7 +2135,10 @@ class SessionController:
     def mark_server_output(self) -> None:
         self.ready_for_commands.set()
 
-    def send_line(self, line: str, secret: bool = False, remember: bool = True) -> None:
+    def send_line(
+        self, line: str, secret: bool = False, remember: bool = True,
+        expected_transport: Transport | None = None,
+    ) -> None:
         # A number of MUDs drop application commands received while their
         # initial Telnet/banner handshake is underway. Wait for first visible
         # server output; bounded fallback keeps silent servers usable.
@@ -2143,7 +2146,7 @@ class SessionController:
         outbound_lines = [line] if secret else split_outbound_buffers(line)
         for index, outbound_line in enumerate(outbound_lines):
             data = (outbound_line + self.profile.newline).encode(self.profile.encoding, "replace")
-            self.send_raw(data)
+            self.send_raw(data, expected_transport=expected_transport)
             self.transcript.write("send", outbound_line, secret=secret)
             if index < len(outbound_lines) - 1:
                 time.sleep(self.profile.paste_line_delay)
@@ -2152,12 +2155,15 @@ class SessionController:
         if len(outbound_lines) > 1 and not secret:
             self.ui.set_status(f"Sent {len(outbound_lines)} buffers; continuations used spoof")
 
-    def send_character_login(self) -> None:
+    def send_character_login(self, expected_transport: Transport | None = None) -> None:
         if self.character_login is None:
             return
         character, password = self.character_login
         # This contains a password: never add it to history or transcript.
-        self.send_line(f"connect {character} {password}", secret=True, remember=False)
+        self.send_line(
+            f"connect {character} {password}", secret=True, remember=False,
+            expected_transport=expected_transport,
+        )
         self.ui.set_status(f"Login command sent for {character}")
 
     def observe_output(self, text: str) -> None:
@@ -2283,8 +2289,15 @@ def reconnect_session(
 
 
 def send_character_login_after_ready(controller: SessionController) -> None:
+    current = controller.current_connection()
+    if current is None:
+        return
+    transport, _ = current
     try:
-        controller.send_character_login()
+        controller.send_character_login(expected_transport=transport)
+    except ConnectionChanged:
+        # A reconnect superseded this worker; the new connection owns login.
+        return
     except (OSError, ValueError) as exc:
         controller.ui.set_status(f"Character login failed: {exc}")
 
