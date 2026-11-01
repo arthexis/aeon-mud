@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import aeon_mud_client as legacy
-from aeon_mud import config, profiles, security, telnet, transport, terminal_text, transcript
+from aeon_mud import config, profiles, security, telnet, transport, terminal_text, transcript, session
 
 
 class InfrastructureExtractionTests(unittest.TestCase):
@@ -49,12 +49,12 @@ class InfrastructureExtractionTests(unittest.TestCase):
         self.assertEqual(payload, b"")
         self.assertIn(bytes([telnet.IAC, telnet.WILL, telnet.TELNET_NAWS]), negotiation)
 
-    def test_legacy_host_trust_path_hook_remains_patchable(self):
+    def test_session_host_trust_path_hook_is_patchable(self):
         profile = profiles.Profile(name="local", host="127.0.0.1")
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "trusted.json"
-            with mock.patch.object(legacy, "known_hosts_path", return_value=path):
-                legacy.run_sanity_checks(profile, "initial banner", True, True)
+            with mock.patch.object(session, "known_hosts_path", return_value=path):
+                session.run_sanity_checks(profile, "initial banner", True, True)
             self.assertTrue(path.exists())
             self.assertIsNotNone(profiles.KnownHosts(path).get("local"))
 
