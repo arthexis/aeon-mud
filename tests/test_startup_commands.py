@@ -3,9 +3,7 @@ import threading
 import unittest
 from unittest import mock
 
-from aeon_mud import session
-
-from aeon_mud import profiles, session, telnet
+from aeon_mud import session, telnet
 from support import make_controller, make_profile
 
 
