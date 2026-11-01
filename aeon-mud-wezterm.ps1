@@ -67,10 +67,17 @@ if (-not (Test-Path -LiteralPath $client -PathType Leaf)) {
     exit 1
 }
 
+$sessionScript = Join-Path $PSScriptRoot "aeon-mud-wezterm-session.ps1"
+if (-not (Test-Path -LiteralPath $sessionScript -PathType Leaf)) {
+    Write-Host "Aeon MUD session wrapper not found: $sessionScript" -ForegroundColor Red
+    exit 1
+}
+
 Write-Host "Launching Aeon MUD in WezTerm..."
 Write-Host "WezTerm: $wezterm"
 try {
-    & $wezterm start --cwd $PSScriptRoot -- $python.Source $client @args
+    # -NoExit keeps the pane open even when Python exits before displaying its error.
+    & $wezterm start --cwd $PSScriptRoot -- powershell.exe -NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File $sessionScript $python.Source $client @args
     $launchCode = $LASTEXITCODE
 } catch {
     Write-Host "WezTerm launch failed: $_" -ForegroundColor Red
