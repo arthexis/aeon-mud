@@ -277,12 +277,13 @@ class ProfileStore:
         self.data["profiles"][profile.name] = profile.to_stored_dict()
         self.save()
 
-    def find_host(self, host: str, port: int | None = None) -> Profile | None:
-        """Resolve saved hostnames case-insensitively; never choose ambiguously."""
+    def find_host(self, host: str, port: int | None = None, *, short: bool = False) -> Profile | None:
+        """Resolve a host by exact FQDN or unique leftmost subdomain."""
         normalized = host.rstrip(".").casefold()
         matches = [
             self.get(name) for name in self.names()
-            if self.data["profiles"][name].get("host", "").rstrip(".").casefold() == normalized
+            if (self.data["profiles"][name].get("host", "").rstrip(".").casefold().split(".")[0]
+                if short else self.data["profiles"][name].get("host", "").rstrip(".").casefold()) == normalized
         ]
         if port is not None:
             matches = [item for item in matches if item.port == port]
@@ -290,10 +291,10 @@ class ProfileStore:
 
     def auto_profile_name(self, host: str, port: int) -> str:
         normalized = host.rstrip(".").casefold()
-        # Never overwrite a user-created profile with the same name.
-        if normalized not in self.data["profiles"]:
-            return normalized
-        return f"{normalized}:{port}"
+        for candidate in (normalized, f"{normalized}:{port}"):
+            if candidate not in self.data["profiles"]:
+                return candidate
+        raise SystemExit(f"Cannot save automatic profile: name already in use for {host}:{port}")
 
     def remove(self, name: str) -> None:
         if name not in self.data["profiles"]:
@@ -2595,8 +2596,10 @@ def profile_from_args(args: argparse.Namespace, store: ProfileStore | None = Non
         else:
             # A unique hostname can also access a saved profile by FQDN.
             profile = store.find_host(args.profile)
+            if profile is None and "." not in args.profile and ":" not in args.profile:
+                profile = store.find_host(args.profile, short=True)
             if profile is None:
-                raise SystemExit(f"Profile not found: {args.profile}")
+                raise SystemExit(f"Profile not found or ambiguous host alias: {args.profile}")
     else:
         if not args.host:
             raise SystemExit("connect requires a profile name or --host")
@@ -2604,22 +2607,32 @@ def profile_from_args(args: argparse.Namespace, store: ProfileStore | None = Non
             host, port = normalize_host_port(args.host, args.port, explicit_port=args.port is not None)
         except HostPortError as exc:
             raise SystemExit(str(exc)) from exc
-        profile = store.find_host(host, port if args.port is not None or ":" in args.host else None)
+        specified_port = args.port is not None or split_optional_host_port(args.host)[1] is not None
+        profile = store.find_host(host, port if specified_port else None)
         if profile is None:
             name = store.auto_profile_name(host, port)
             profile = Profile(name=name, host=host, port=port)
-            # Prevent overwriting an existing profile when hostname and port collide.
-            if name in store.data["profiles"]:
-                profile.name = f"{name}:auto"
     return apply_connect_overrides(profile, args)
 
 
 def command_connect(args: argparse.Namespace) -> None:
     store = ProfileStore()
     profile = profile_from_args(args, store)
-    # Successful connections persist their hostname profile and public endpoint
-    # approval; failed/refused connections never grant trust or save a profile.
+    original = store.data["profiles"].get(profile.name)
+
+    # Successful sessions persist their hostname profile. Never overwrite a
+    # manually named profile when --host/--port temporarily overrides its target.
     def remember(connected: Profile) -> None:
+        if original is not None:
+            old_host = original.get("host", "").rstrip(".").casefold()
+            if old_host != connected.host.rstrip(".").casefold() or original.get("port", DEFAULT_PORT) != connected.port:
+                return
+        if getattr(args, "allow_public", False) and not connected.proxy_command and not connected.socks5_host:
+            # A one-off --allow-public acknowledgement must not disable future
+            # checks for unrelated endpoints when saved automatically.
+            connected.approved_public_endpoint = f"{connected.host.rstrip('.').casefold()}:{connected.port}"
+            if original is None:
+                connected.require_private_host = True
         store.set(connected)
 
     session_loop(profile, args, on_connected=remember)
