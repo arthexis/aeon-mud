@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import aeon_mud_client as mud
-from aeon_mud import session
+from aeon_mud import cli, session
 
 
 class AutoProfileTests(unittest.TestCase):
@@ -22,8 +22,8 @@ class AutoProfileTests(unittest.TestCase):
         def connected(profile, _args, on_connected=None):
             on_connected(profile)
 
-        with mock.patch.object(mud, "ProfileStore", return_value=self.store), mock.patch.object(
-            mud, "session_loop", side_effect=connected
+        with mock.patch.object(cli, "ProfileStore", return_value=self.store), mock.patch.object(
+            cli, "session_loop", side_effect=connected
         ):
             mud.command_connect(self.args("--host", "TAPESTRIES.FUR.COM", "--port", "2069",
                                           "--allow-plaintext"))
@@ -39,8 +39,8 @@ class AutoProfileTests(unittest.TestCase):
             self.assertEqual(by_subdomain.host.casefold(), "tapestries.fur.com")
 
     def test_new_port_uses_independent_profile(self):
-        with mock.patch.object(mud, "ProfileStore", return_value=self.store), mock.patch.object(
-            mud, "session_loop", side_effect=lambda profile, args, on_connected=None: on_connected(profile)
+        with mock.patch.object(cli, "ProfileStore", return_value=self.store), mock.patch.object(
+            cli, "session_loop", side_effect=lambda profile, args, on_connected=None: on_connected(profile)
         ):
             mud.command_connect(self.args("--host", "tapestries.fur.com", "--port", "2069", "--allow-plaintext"))
             mud.command_connect(self.args("--host", "tapestries.fur.com", "--port", "2070", "--allow-plaintext"))
@@ -52,8 +52,8 @@ class AutoProfileTests(unittest.TestCase):
     def test_existing_named_profile_not_mutated_by_target_override(self):
         self.store.set(mud.Profile(name="favorite", host="original.test", port=4000,
                                    allow_plaintext=True))
-        with mock.patch.object(mud, "ProfileStore", return_value=self.store), mock.patch.object(
-            mud, "session_loop", side_effect=lambda profile, args, on_connected=None: on_connected(profile)
+        with mock.patch.object(cli, "ProfileStore", return_value=self.store), mock.patch.object(
+            cli, "session_loop", side_effect=lambda profile, args, on_connected=None: on_connected(profile)
         ):
             mud.command_connect(self.args("favorite", "--host", "other.test", "--port", "4001"))
         original = self.store.get("favorite")
