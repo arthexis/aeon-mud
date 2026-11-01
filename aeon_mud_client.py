@@ -937,58 +937,85 @@ def configure_tcp_socket(sock: socket.socket, keepalive_interval: float) -> None
                 pass
 
 
+def recv_exact(sock: socket.socket, count: int) -> bytes:
+    """Receive precisely count bytes or reject a truncated protocol frame."""
+    result = bytearray()
+    while len(result) < count:
+        chunk = sock.recv(count - len(result))
+        if not chunk:
+            raise OSError("Connection closed during SOCKS5 handshake")
+        result.extend(chunk)
+    return bytes(result)
+
+
 def connect_socks5(profile: Profile) -> socket.socket:
-    sock = socket.create_connection((profile.socks5_host, profile.socks5_port), timeout=profile.connect_timeout)
-    configure_tcp_socket(sock, profile.keepalive_interval)
-    sock.sendall(b"\x05\x01\x00")
-    response = sock.recv(2)
-    if response != b"\x05\x00":
-        raise OSError("SOCKS5 proxy does not allow no-auth connections")
-
+    sock = socket.create_connection(
+        (profile.socks5_host, profile.socks5_port), timeout=profile.connect_timeout
+    )
     try:
-        ip = ipaddress.ip_address(profile.host)
-    except ValueError:
-        host_bytes = profile.host.encode("idna")
-        if len(host_bytes) > 255:
-            raise OSError("SOCKS5 destination hostname is too long")
-        address = bytes([3, len(host_bytes)]) + host_bytes
-    else:
-        if ip.version == 4:
-            address = b"\x01" + ip.packed
+        configure_tcp_socket(sock, profile.keepalive_interval)
+        sock.sendall(b"\x05\x01\x00")
+        if recv_exact(sock, 2) != b"\x05\x00":
+            raise OSError("SOCKS5 proxy does not allow no-auth connections")
+
+        try:
+            ip = ipaddress.ip_address(profile.host)
+        except ValueError:
+            host_bytes = profile.host.encode("idna")
+            if len(host_bytes) > 255:
+                raise OSError("SOCKS5 destination hostname is too long")
+            address = bytes([3, len(host_bytes)]) + host_bytes
         else:
-            address = b"\x04" + ip.packed
+            address = (b"\x01" if ip.version == 4 else b"\x04") + ip.packed
 
-    sock.sendall(b"\x05\x01\x00" + address + struct.pack("!H", profile.port))
-    header = sock.recv(4)
-    if len(header) != 4 or header[1] != 0:
-        raise OSError(f"SOCKS5 connect failed: {header!r}")
-    atyp = header[3]
-    if atyp == 1:
-        to_read = 4
-    elif atyp == 3:
-        length = sock.recv(1)
-        to_read = length[0] if length else 0
-    elif atyp == 4:
-        to_read = 16
-    else:
-        raise OSError("SOCKS5 returned unknown address type")
-    if to_read:
-        sock.recv(to_read)
-    sock.recv(2)
-    return sock
+        sock.sendall(b"\x05\x01\x00" + address + struct.pack("!H", profile.port))
+        header = recv_exact(sock, 4)
+        if header[0] != 5 or header[2] != 0:
+            raise OSError(f"Malformed SOCKS5 response: {header!r}")
+        if header[1] != 0:
+            raise OSError(f"SOCKS5 connect failed with status {header[1]}")
+        atyp = header[3]
+        if atyp == 1:
+            length = 4
+        elif atyp == 3:
+            length = recv_exact(sock, 1)[0]
+            if not length:
+                raise OSError("SOCKS5 returned empty bound hostname")
+        elif atyp == 4:
+            length = 16
+        else:
+            raise OSError("SOCKS5 returned unknown address type")
+        recv_exact(sock, length + 2)
+        return sock
+    except BaseException:
+        sock.close()
+        raise
 
 
-def make_transport(profile: Profile) -> Transport:
+def is_private_address(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
+def make_transport(profile: Profile, *, require_private_peer: bool = False) -> Transport:
     if profile.proxy_command:
         return ProcessTransport(profile.proxy_command)
     if profile.socks5_host:
         sock = connect_socks5(profile)
+    else:
+        sock = socket.create_connection((profile.host, profile.port), timeout=profile.connect_timeout)
+        configure_tcp_socket(sock, profile.keepalive_interval)
+    try:
+        if require_private_peer and not is_private_address(sock.getpeername()[0]):
+            raise OSError("Connected peer violates the private-address policy")
         sock.settimeout(None)
         return SocketTransport(sock)
-    sock = socket.create_connection((profile.host, profile.port), timeout=profile.connect_timeout)
-    configure_tcp_socket(sock, profile.keepalive_interval)
-    sock.settimeout(None)
-    return SocketTransport(sock)
+    except BaseException:
+        sock.close()
+        raise
 
 
 def connection_target_label(profile: Profile) -> str:
@@ -1062,8 +1089,10 @@ def pre_read_banner(transport: Transport, codec: TelnetCodec, timeout: float) ->
     return sanitize_terminal_text(text)
 
 
-def open_session_transport(profile: Profile) -> tuple[Transport, TelnetCodec, str]:
-    transport = make_transport(profile)
+def open_session_transport(
+    profile: Profile, *, require_private_peer: bool = False,
+) -> tuple[Transport, TelnetCodec, str]:
+    transport = make_transport(profile, require_private_peer=require_private_peer)
     codec = TelnetCodec(profile.terminal_type)
     try:
         width, height = shutil.get_terminal_size((100, 30))
@@ -1875,8 +1904,10 @@ class SessionController:
         transcript: Transcript,
         ui: MudUi,
         password: str | None,
+        private_peer_required: bool = False,
     ) -> None:
         self.profile = profile
+        self.private_peer_required = private_peer_required
         self.transport = transport
         self.codec = codec
         self.transcript = transcript
@@ -2068,10 +2099,9 @@ def reconnect_session(
             ui.set_status(f"Reconnecting to {target} (attempt {attempt})")
             transport = None
             try:
-                if profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
-                    if not is_private_target(profile.host):
-                        raise ValueError("Target no longer resolves exclusively to private addresses")
-                transport, codec, initial_banner = open_session_transport(profile)
+                transport, codec, initial_banner = open_session_transport(
+                    profile, require_private_peer=controller.private_peer_required
+                )
                 run_sanity_checks(profile, initial_banner, False, False, interactive=False)
             except Exception as exc:
                 if transport is not None:
@@ -2334,8 +2364,10 @@ def send_composed_input(
 def session_loop(profile: Profile, args: argparse.Namespace) -> None:
     if not profile.allow_plaintext:
         raise SystemExit("Refusing plaintext Telnet until --allow-plaintext is set on the profile or command.")
+    private_peer_required = False
     if profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
-        if not is_private_target(profile.host):
+        private_peer_required = is_private_target(profile.host)
+        if not private_peer_required:
             ok = prompt_yes_no(
                 f"{profile.host} does not resolve only to private/link-local addresses. Continue with plaintext Telnet?",
                 default=False,
@@ -2351,7 +2383,9 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
             password = getpass.getpass(f"Password for {profile.label()} auto-login: ")
 
     try:
-        transport, codec, initial_banner = open_session_transport(profile)
+        transport, codec, initial_banner = open_session_transport(
+            profile, require_private_peer=private_peer_required
+        )
     except OSError as exc:
         raise SystemExit(f"Could not connect to {connection_target_label(profile)}: {exc}") from exc
     try:
@@ -2362,7 +2396,10 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
 
     transcript = Transcript(profile)
     ui = MudUi(profile, no_alt_screen=args.no_alt_screen)
-    controller = SessionController(profile, transport, codec, transcript, ui, password)
+    controller = SessionController(
+        profile, transport, codec, transcript, ui, password,
+        private_peer_required=private_peer_required,
+    )
     stop = threading.Event()
     receiver = threading.Thread(
         target=receiver_loop,
