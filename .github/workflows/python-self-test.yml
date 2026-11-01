@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "aeon_mud_client.py"
+      - "aeon_mud/**"
+      - "pyproject.toml"
       - "tests/**"
       - "aeon-mud-wezterm.ps1"
       - "aeon-mud-wezterm-session.ps1"
@@ -21,11 +23,19 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile Python client
-        run: python -m py_compile aeon_mud_client.py
+        run: python -m compileall -q aeon_mud_client.py aeon_mud
       - name: Run built-in regression tests
         run: python aeon_mud_client.py self-test
       - name: Run loopback integration tests
         run: python -m unittest discover -s tests -v
+      - name: Verify package entry point
+        run: python -m aeon_mud self-test
+      - name: Build wheel and verify installed console entry point
+        run: |
+          python -m pip install --upgrade build
+          python -m build --wheel --no-isolation
+          python -m pip install dist/*.whl
+          aeon-mud self-test
 
   wezterm-launcher:
     runs-on: windows-latest
