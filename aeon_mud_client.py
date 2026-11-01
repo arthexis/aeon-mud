@@ -1146,10 +1146,10 @@ def open_session_transport(
     codec = TelnetCodec(profile.terminal_type)
     try:
         width, height = shutil.get_terminal_size((100, 30))
-        try:
-            transport.sendall(codec.set_window_size(width, height))
-        except OSError:
-            pass
+        # Do not send unsolicited NAWS (IAC SB ...) before the MUD has
+        # negotiated DO NAWS. Only respond after the server requests it.
+        codec.width = max(1, min(width, 65535))
+        codec.height = max(1, min(height, 65535))
         initial_banner = pre_read_banner(transport, codec, profile.sanity_timeout)
     except Exception:
         transport.close()
@@ -2051,6 +2051,7 @@ class SessionController:
         self.reconnect_lock = threading.Lock()
         self.last_io = time.monotonic()
         self.last_keepalive = 0.0
+        self.ready_for_commands = threading.Event()
 
     def current_connection(self) -> tuple[Transport, TelnetCodec] | None:
         with self.lock:
@@ -2069,6 +2070,7 @@ class SessionController:
             self.sent_password = False
             self.last_io = time.monotonic()
             self.last_keepalive = 0.0
+            self.ready_for_commands = threading.Event()
         if old_transport is not None and old_transport is not transport:
             old_transport.close()
         self.ui.set_connected(True)
@@ -2130,7 +2132,14 @@ class SessionController:
         except OSError:
             pass
 
+    def mark_server_output(self) -> None:
+        self.ready_for_commands.set()
+
     def send_line(self, line: str, secret: bool = False, remember: bool = True) -> None:
+        # A number of MUDs drop application commands received while their
+        # initial Telnet/banner handshake is underway. Wait for first visible
+        # server output; bounded fallback keeps silent servers usable.
+        self.ready_for_commands.wait(timeout=2.0)
         outbound_lines = [line] if secret else split_outbound_buffers(line)
         for index, outbound_line in enumerate(outbound_lines):
             data = (outbound_line + self.profile.newline).encode(self.profile.encoding, "replace")
@@ -2255,18 +2264,29 @@ def reconnect_session(
                 transport.close()
                 return False
             controller.install_connection(transport, codec)
-            if controller.character_login is not None:
-                try:
-                    controller.send_character_login()
-                except OSError as exc:
-                    ui.set_status(f"Character login retry failed: {exc}")
+            if initial_banner:
+                controller.mark_server_output()
             append_client_event(transcript, ui, f"Reconnected to {target}.")
+            if controller.character_login is not None:
+                # Login must not block the receiver: it depends on the
+                # receiver processing the server's first output.
+                threading.Thread(
+                    target=send_character_login_after_ready,
+                    args=(controller,), daemon=True,
+                ).start()
             if initial_banner:
                 transcript.write("recv", initial_banner)
                 ui.append_output(initial_banner)
                 controller.observe_output(initial_banner)
             return True
     return False
+
+
+def send_character_login_after_ready(controller: SessionController) -> None:
+    try:
+        controller.send_character_login()
+    except (OSError, ValueError) as exc:
+        controller.ui.set_status(f"Character login failed: {exc}")
 
 
 def receiver_loop(
@@ -2313,6 +2333,7 @@ def receiver_loop(
                     break
                 continue
         if output:
+            controller.mark_server_output()
             assert decoder is not None
             text = decoder.feed(output)
             transcript.write("recv", text)
@@ -2591,12 +2612,16 @@ def session_loop(
         reader = KeyReader()
         ui.start()
         if initial_banner:
+            controller.mark_server_output()
             transcript.write("recv", initial_banner)
             ui.append_output(initial_banner)
             controller.observe_output(initial_banner)
-        if character is not None:
-            controller.send_character_login()
         receiver.start()
+        if character is not None:
+            threading.Thread(
+                target=send_character_login_after_ready,
+                args=(controller,), daemon=True,
+            ).start()
         while not stop.is_set():
             controller.maybe_send_keepalive()
             key = reader.read_key(timeout=0.1)
