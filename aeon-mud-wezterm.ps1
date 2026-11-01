@@ -18,17 +18,20 @@ $potential = @()
 if ($env:AEON_WEZTERM_PATH) {
     $potential += $env:AEON_WEZTERM_PATH
 }
-foreach ($commandName in @("wezterm-gui.exe", "wezterm.exe")) {
-    $found = Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue
-    if ($found) {
-        $potential += $found.Source
-    }
+$guiCommand = Get-Command wezterm-gui.exe -CommandType Application -ErrorAction SilentlyContinue
+if ($guiCommand) {
+    $potential += $guiCommand.Source
 }
 $potential += @(
     (Join-Path $env:ProgramFiles "WezTerm\wezterm-gui.exe"),
     (Join-Path $env:LOCALAPPDATA "Programs\WezTerm\wezterm-gui.exe"),
     (Join-Path $env:USERPROFILE "scoop\apps\wezterm\current\wezterm-gui.exe")
 )
+# The CLI executable works too, but is less suitable for desktop shortcuts.
+$cliCommand = Get-Command wezterm.exe -CommandType Application -ErrorAction SilentlyContinue
+if ($cliCommand) {
+    $potential += $cliCommand.Source
+}
 
 $wezterm = $null
 foreach ($candidate in $potential) {
