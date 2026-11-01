@@ -99,6 +99,31 @@ the PowerShell wrapper or edit `profiles.json` directly:
 
 An example profile file is provided in `profiles.example.json`.
 
+### Automatically remembered host profiles
+
+Connecting directly with `--host` automatically creates a profile keyed by the
+hostname after a **successful** connection. Subsequent launches can use the FQDN
+or its unique leftmost subdomain without specifying connection flags again:
+
+```powershell
+.\aeon-mud-wezterm.bat connect --host tapestries.fur.com --port 2069 --allow-plaintext
+.\aeon-mud-wezterm.bat connect tapestries.fur.com
+.\aeon-mud-wezterm.bat connect tapestries
+```
+
+For a public address, the client still asks for explicit permission on the
+first connection. It remembers that acknowledgement **only** for the exact
+hostname and port, after connection succeeds. A different endpoint prompts
+again. If more than one saved profile shares the same subdomain, use the FQDN
+or the full profile name to disambiguate. Explicitly named profiles continue
+to take precedence, and a one-time destination override does not overwrite
+a manually saved profile.
+
+Profiles are saved in `profiles.json` under the client configuration
+directory. Use `aeon-mud.bat profile list` to inspect or
+`aeon-mud.bat profile remove NAME` to forget one. Telnet remains unencrypted;
+remembering permission is a convenience, not identity verification.
+
 ## Controls
 
 - `Up` / `Down`: scroll output
