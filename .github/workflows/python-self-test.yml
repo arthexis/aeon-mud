@@ -30,7 +30,7 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Verify independent infrastructure imports
         run: |
-          python -c "import aeon_mud.config, aeon_mud.profiles, aeon_mud.security, aeon_mud.telnet, aeon_mud.transport, aeon_mud.terminal_text, aeon_mud.transcript"
+          python -c "import aeon_mud.config, aeon_mud.profiles, aeon_mud.security, aeon_mud.telnet, aeon_mud.transport, aeon_mud.terminal_text, aeon_mud.transcript, aeon_mud.input, aeon_mud.terminal, aeon_mud.commands, aeon_mud.session"
       - name: Verify package entry point
         run: python -m aeon_mud self-test
       - name: Build wheel and verify installed console entry point
