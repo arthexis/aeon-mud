@@ -2534,6 +2534,8 @@ def session_loop(
     character_password: str | None = None
     if character is not None:
         character = validate_character_name(character)
+    set_connection_tab_title(profile, character)
+    if character is not None:
         key = character_secret_key(profile, character)
         if Dpapi.available():
             character_password = SecretStore().get_password(key)
@@ -2541,8 +2543,6 @@ def session_loop(
             character_password = getpass.getpass(f"Password for {character} on {profile.host}: ")
         if not character_password or "\r" in character_password or "\n" in character_password:
             raise SystemExit("Password must not be empty or contain a newline")
-    set_connection_tab_title(profile, character)
-
     password: str | None = None
     if profile.auto_login and character is None:
         password = SecretStore().get_password(profile.label())
