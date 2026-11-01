@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "aeon_mud_client.py"
+      - "tests/**"
       - ".github/workflows/python-self-test.yml"
   workflow_dispatch:
 
@@ -19,3 +20,5 @@ jobs:
         run: python -m py_compile aeon_mud_client.py
       - name: Run built-in regression tests
         run: python aeon_mud_client.py self-test
+      - name: Run loopback integration tests
+        run: python -m unittest discover -s tests -v
