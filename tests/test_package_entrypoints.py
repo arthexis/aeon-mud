@@ -18,15 +18,16 @@ class PackageEntrypointTests(unittest.TestCase):
     def test_package_version(self):
         self.assertEqual(aeon_mud.__version__, "0.1.0")
 
-    def test_cli_forwards_args_and_return_code(self):
-        with mock.patch.object(aeon_mud_client, "main", return_value=7) as main:
-            self.assertEqual(cli.main(["self-test"]), 7)
-            main.assert_called_once_with(["self-test"])
+    def test_cli_is_canonical_and_legacy_exports_match(self):
+        self.assertIs(aeon_mud_client.main, cli.main)
+        self.assertIs(aeon_mud_client.build_parser, cli.build_parser)
+        self.assertIs(aeon_mud_client.command_connect, cli.command_connect)
 
-    def test_cli_forwards_default_argv(self):
-        with mock.patch.object(aeon_mud_client, "main", return_value=0) as main:
-            self.assertEqual(cli.main(), 0)
-            main.assert_called_once_with(None)
+    def test_cli_invokes_selected_command(self):
+        with mock.patch.object(cli, "build_parser") as parser:
+            parser.return_value.parse_args.return_value.func.return_value = None
+            self.assertEqual(cli.main(["paths"]), 0)
+            parser.return_value.parse_args.assert_called_once_with(["paths"])
 
     def test_legacy_script_and_package_self_test(self):
         for command in (
