@@ -19,16 +19,27 @@ def package_imports(path: Path) -> set[str]:
     """Return direct intra-package dependencies without executing modules."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
+    class ImportCollector(ast.NodeVisitor):
+        def visit_If(self, node: ast.If) -> None:
+            # TYPE_CHECKING imports do not execute and cannot cause runtime cycles.
+            if isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING":
+                for statement in node.orelse:
+                    self.visit(statement)
+                return
+            self.generic_visit(node)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             if node.level and node.module:
                 imports.add(node.module.split(".")[0])
             elif node.module and node.module.startswith("aeon_mud."):
                 imports.add(node.module.split(".")[1])
-        elif isinstance(node, ast.Import):
+
+        def visit_Import(self, node: ast.Import) -> None:
             for alias in node.names:
                 if alias.name.startswith("aeon_mud."):
                     imports.add(alias.name.split(".")[1])
+
+    ImportCollector().visit(tree)
     return imports
 
 
@@ -92,7 +103,17 @@ class PackageArchitectureTests(unittest.TestCase):
                                     capture_output=True, timeout=20)
             self.assertEqual(result.returncode, 0, result.stderr)
             outputs.append(result.stdout)
-        self.assertEqual(*outputs)
+        for output in outputs:
+            self.assertIn("--login CHARACTER", output)
+            self.assertIn("--host HOST", output)
+        # argparse includes the entry-point filename in its usage string.
+        # The functionality and option inventory must match, not argv[0].
+        self.assertEqual(
+            set(line.strip() for line in outputs[0].splitlines()
+                if line.strip().startswith("--")),
+            set(line.strip() for line in outputs[1].splitlines()
+                if line.strip().startswith("--")),
+        )
 
 
 if __name__ == "__main__":
