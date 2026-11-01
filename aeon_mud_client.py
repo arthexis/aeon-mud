@@ -1767,8 +1767,8 @@ class MudUi:
         connection = "connected" if self.connected else "disconnected"
         log_state = "on" if self.profile.transcript != "off" else "off"
         status = (
-            f" {self.profile.label()} {self.profile.host}:{self.profile.port} "
-            f"TELNET {connection} log:{log_state} F1 help"
+            f" F1 {'close' if self.help_expanded else 'help'} | {self.profile.label()} "
+            f"{self.profile.host}:{self.profile.port} TELNET {connection} log:{log_state}"
         )
         if self.scroll_offset:
             status += f" scroll:{self.scroll_offset}"
