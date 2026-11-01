@@ -11,7 +11,7 @@ from support import make_profile
 class DualInputTests(unittest.TestCase):
     def make_ui(self):
         with mock.patch.object(profiles.HistoryStore, "list_for", return_value=["north", "look"]):
-            return terminal.MudUi(profiles.Profile(name="dual", host="127.0.0.1", allow_plaintext=True))
+            return terminal.MudUi(make_profile(name="dual", host="127.0.0.1"))
 
     def test_tab_switch_preserves_cursor_and_both_drafts(self):
         ui = self.make_ui()
