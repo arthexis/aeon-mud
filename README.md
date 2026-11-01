@@ -78,6 +78,23 @@ The interactive client is now divided into four additional package modules:
 compatibility re-exports. Launcher arguments, profile locations, encrypted
 credentials and the MUD protocol remain unchanged.
 
+## Tests
+
+The project uses standard-library `unittest` without additional test
+dependencies. Run the full suite from the repository root:
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+The tests are grouped by behavior (transport and reconnect, character login,
+startup commands, terminal input, CLI/launchers and package architecture).
+Shared network and session fixtures live in `tests/support.py`. Tests
+normally import the package module that owns the behavior so mocked
+dependencies remain scoped to their implementation. Only compatibility
+tests import `aeon_mud_client` directly. Keep the built-in
+`python -m aeon_mud self-test` for installed-package smoke checks.
+
 ## Package architecture — Increment 4
 
 The package is the authoritative implementation. The CLI commands, parser,
