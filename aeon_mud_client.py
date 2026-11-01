@@ -211,6 +211,7 @@ class Profile:
     expected_banner: str = ""
     username: str = ""
     auto_login: bool = False
+    characters: list[str] = field(default_factory=list)
     login_prompt: str = r"(?im)(?:name|username|login):\s*$"
     password_prompt: str = r"(?im)password:\s*$"
     transcript: str = "off"
@@ -429,6 +430,35 @@ def _crypt_unprotect_data(data: bytes) -> bytes:
         return _blob_to_bytes(out_blob)
     finally:
         kernel32.LocalFree(out_blob.pbData)
+
+
+def validate_character_name(name: str) -> str:
+    # This value becomes part of a plaintext MUD command; reject separators.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+        raise SystemExit("Character name must be 1-64 letters, numbers, '_' or '-'")
+    return name
+
+
+def character_secret_key(profile: Profile, character: str) -> str:
+    # Include the exact destination to keep credentials isolated across
+    # endpoints even when a profile name is reused.
+    return "character:" + json.dumps(
+        [profile.host.rstrip(".").casefold(), profile.port, character],
+        separators=(",", ":"),
+    )
+
+
+def connection_tab_title(profile: Profile, character: str | None = None) -> str:
+    host = profile.host.rstrip(".")
+    return f"{host} ({character})" if character else host
+
+
+def set_connection_tab_title(profile: Profile, character: str | None = None) -> None:
+    # OSC 1 pins the tab title in WezTerm, even when Windows updates OSC 2
+    # for the foreground process. Avoid affecting unrelated terminals.
+    if os.environ.get("WEZTERM_PANE") and sys.stdout.isatty():
+        sys.stdout.write("\x1b]1;" + connection_tab_title(profile, character) + "\x1b\\")
+        sys.stdout.flush()
 
 
 class SecretStore:
@@ -2013,6 +2043,7 @@ class SessionController:
         self.transcript = transcript
         self.ui = ui
         self.password = password
+        self.character_login: tuple[str, str] | None = None
         self.tail = ""
         self.sent_username = False
         self.sent_password = False
@@ -2112,7 +2143,17 @@ class SessionController:
         if len(outbound_lines) > 1 and not secret:
             self.ui.set_status(f"Sent {len(outbound_lines)} buffers; continuations used spoof")
 
+    def send_character_login(self) -> None:
+        if self.character_login is None:
+            return
+        character, password = self.character_login
+        # This contains a password: never add it to history or transcript.
+        self.send_line(f"connect {character} {password}", secret=True, remember=False)
+        self.ui.set_status(f"Login command sent for {character}")
+
     def observe_output(self, text: str) -> None:
+        if self.character_login is not None:
+            return
         self.tail = (self.tail + strip_ansi(text))[-2000:]
         if self._matches(self.profile.password_prompt) and not self.sent_password:
             self.ui.set_secret_entry(True)
@@ -2214,6 +2255,11 @@ def reconnect_session(
                 transport.close()
                 return False
             controller.install_connection(transport, codec)
+            if controller.character_login is not None:
+                try:
+                    controller.send_character_login()
+                except OSError as exc:
+                    ui.set_status(f"Character login retry failed: {exc}")
             append_client_event(transcript, ui, f"Reconnected to {target}.")
             if initial_banner:
                 transcript.write("recv", initial_banner)
@@ -2484,8 +2530,21 @@ def session_loop(
                     raise SystemExit("Connection aborted by private-host policy")
                 public_approval_given = True
 
+    character = getattr(args, "login", None)
+    character_password: str | None = None
+    if character is not None:
+        character = validate_character_name(character)
+        key = character_secret_key(profile, character)
+        if Dpapi.available():
+            character_password = SecretStore().get_password(key)
+        if character_password is None:
+            character_password = getpass.getpass(f"Password for {character} on {profile.host}: ")
+        if not character_password or "\r" in character_password or "\n" in character_password:
+            raise SystemExit("Password must not be empty or contain a newline")
+    set_connection_tab_title(profile, character)
+
     password: str | None = None
-    if profile.auto_login:
+    if profile.auto_login and character is None:
         password = SecretStore().get_password(profile.label())
         if profile.username and password is None:
             password = getpass.getpass(f"Password for {profile.label()} auto-login: ")
@@ -2500,6 +2559,12 @@ def session_loop(
         run_sanity_checks(profile, initial_banner, args.accept_host_change, args.yes)
         if public_approval_given:
             profile.approved_public_endpoint = f"{profile.host.rstrip('.').casefold()}:{profile.port}"
+        if character is not None:
+            if character not in profile.characters:
+                profile.characters.append(character)
+            if Dpapi.available():
+                # Persist a reversible Windows-user-bound encrypted secret.
+                SecretStore().set_password(character_secret_key(profile, character), character_password)
         if on_connected is not None:
             on_connected(profile)
     except BaseException:
@@ -2512,6 +2577,8 @@ def session_loop(
         profile, transport, codec, transcript, ui, password,
         private_peer_required=private_peer_required,
     )
+    if character is not None:
+        controller.character_login = (character, character_password)
     stop = threading.Event()
     receiver = threading.Thread(
         target=receiver_loop,
@@ -2527,6 +2594,8 @@ def session_loop(
             transcript.write("recv", initial_banner)
             ui.append_output(initial_banner)
             controller.observe_output(initial_banner)
+        if character is not None:
+            controller.send_character_login()
         receiver.start()
         while not stop.is_set():
             controller.maybe_send_keepalive()
@@ -3132,6 +3201,7 @@ def build_parser() -> argparse.ArgumentParser:
     connect.add_argument("--allow-public", action="store_true", help="allow plaintext target outside private/link-local ranges")
     connect.add_argument("--expected-banner")
     connect.add_argument("--username")
+    connect.add_argument("--login", metavar="CHARACTER", help="send 'connect CHARACTER PASSWORD' after connection; save an encrypted per-character password on Windows")
     connect.add_argument("--auto-login", action="store_true")
     connect.add_argument("--no-auto-login", action="store_true")
     connect.add_argument("--transcript", choices=["off", "plain", "encrypted"])
