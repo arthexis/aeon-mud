@@ -23,6 +23,30 @@ The client also accepts `HOST:PORT` directly:
 .\aeon-mud.bat connect 127.0.0.1:4000 --allow-plaintext
 ```
 
+## Python package (increment 1)
+
+The repository now includes an `aeon_mud` package with a stable module
+and console entry point. A checkout still runs without installation:
+
+```powershell
+python -m aeon_mud connect tapestries --login Merlin
+python -m aeon_mud self-test
+```
+
+Optional editable installation makes `aeon-mud` available as a command
+where your Python scripts directory is on PATH:
+
+```powershell
+python -m pip install -e .
+aeon-mud self-test
+```
+
+All original launchers, including `aeon-mud.bat`, the Unix shell script,
+`aeon-mud-wezterm.bat`, and `python aeon_mud_client.py`, remain supported.
+For this first increment, the package CLI delegates to the existing client
+module; internal modules migrate incrementally in later PRs. No runtime
+dependencies were added, and profile/credential paths remain unchanged.
+
 ## Optional WezTerm GUI launcher (Windows)
 
 [WezTerm](https://wezterm.org/) is an **optional** terminal GUI host. The client
