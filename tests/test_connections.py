@@ -105,8 +105,8 @@ class ConnectionTests(unittest.TestCase):
             peer.recv(256)
             for chunk in (b"log", b"in: "):
                 peer.sendall(chunk)
-            # Leave time for the configured banner sanity window.
-            threading.Event().wait(0.15)
+            # Keep the listener responsive for the next connection.
+            threading.Event().wait(0.01)
 
         with tempfile.TemporaryDirectory() as tmp, LocalServer(respond, count=2) as srv:
             p = mud.Profile(name="integration", host="127.0.0.1", port=srv.port,
