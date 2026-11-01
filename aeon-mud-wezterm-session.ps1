@@ -1,17 +1,13 @@
 # Runs inside the WezTerm window. Do not exit the shell on client failure.
 $ErrorActionPreference = "Stop"
 
-if ($args.Count -lt 2) {
+$pythonPath = $env:AEON_MUD_PYTHON_PATH
+$clientPath = $env:AEON_MUD_SCRIPT_PATH
+if (-not $pythonPath -or -not $clientPath) {
     Write-Host "Aeon MUD launcher error: missing Python executable or client path." -ForegroundColor Red
     return
 }
-
-$pythonPath = [string]$args[0]
-$clientPath = [string]$args[1]
-$clientArguments = @()
-if ($args.Count -gt 2) {
-    $clientArguments = @($args[2..($args.Count - 1)])
-}
+$clientArguments = @($args)
 
 Write-Host "Aeon MUD terminal session"
 try {
