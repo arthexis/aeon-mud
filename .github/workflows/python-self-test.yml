@@ -6,6 +6,7 @@ on:
       - "aeon_mud_client.py"
       - "tests/**"
       - "aeon-mud-wezterm.ps1"
+      - "aeon-mud-wezterm-session.ps1"
       - "aeon-mud-wezterm.bat"
       - "README.md"
       - ".github/workflows/python-self-test.yml"
@@ -46,6 +47,14 @@ jobs:
           if ($parseErrors.Count -ne 0) {
             throw "PowerShell launcher has syntax errors: $parseErrors"
           }
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD "aeon-mud-wezterm-session.ps1"),
+            [ref]$tokens,
+            [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) {
+            throw "PowerShell session wrapper has syntax errors: $parseErrors"
+          }
           $usage = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\aeon-mud-wezterm.ps1" 2>&1
           $launcherCode = $LASTEXITCODE
           $global:LASTEXITCODE = 0
@@ -76,4 +85,25 @@ jobs:
           }
           if (-not (($output | Out-String) -match "exited with code|launch failed")) {
             throw "Launcher did not print a useful failure diagnostic"
+          }
+      - name: Session wrapper preserves errors and argument boundaries
+        shell: powershell
+        run: |
+          $python = (Get-Command python.exe -CommandType Application).Source
+          $session = Join-Path $PWD "aeon-mud-wezterm-session.ps1"
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session $python "-c" "import sys; print('PASSED_ARGS=' + repr(sys.argv[1:]))" "two words" "--port" "2069" 2>&1
+          $code = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          $result = $output | Out-String
+          Write-Host $result
+          if ($code -ne 0 -or $result -notmatch "two words" -or $result -notmatch "2069" -or $result -notmatch "ended normally") {
+            throw "Session wrapper failed to forward arguments"
+          }
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session $python "-c" "import sys; sys.exit(7)" 2>&1
+          $code = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          $result = $output | Out-String
+          Write-Host $result
+          if ($code -ne 0 -or $result -notmatch "exited with code 7") {
+            throw "Session wrapper failed to preserve failure diagnostics"
           }
