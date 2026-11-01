@@ -3070,7 +3070,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.func(args)
     except KeyboardInterrupt:
-        print("\\nDisconnected (Ctrl+C).")
+        print("\nDisconnected (Ctrl+C).")
         return 130
     return 0
 
