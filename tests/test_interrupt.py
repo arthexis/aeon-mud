@@ -9,7 +9,8 @@ import aeon_mud_client as mud
 
 class InterruptTests(unittest.TestCase):
     def test_ctrl_c_at_cli_boundary_has_no_traceback(self):
-        with mock.patch.object(mud, "command_paths", side_effect=KeyboardInterrupt):
+        with mock.patch.object(mud, "build_parser") as parser:
+            parser.return_value.parse_args.return_value.func.side_effect = KeyboardInterrupt
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 status = mud.main(["paths"])
