@@ -23,6 +23,39 @@ The client also accepts `HOST:PORT` directly:
 .\aeon-mud.bat connect 127.0.0.1:4000 --allow-plaintext
 ```
 
+## Optional WezTerm GUI launcher (Windows)
+
+[WezTerm](https://wezterm.org/) is an **optional** terminal GUI host. The client
+still works unchanged in PowerShell/Windows Terminal and requires only Python.
+WezTerm is not bundled, downloaded automatically, or added as a Python package.
+
+Install WezTerm once using the [official Windows installation instructions](https://wezterm.org/install/windows.html)
+or Windows Package Manager:
+
+```powershell
+winget install --id wez.wezterm --exact
+```
+
+Run the dedicated Windows launcher with the same arguments as `aeon-mud.bat`:
+
+```powershell
+.\aeon-mud-wezterm.bat connect --host tapestries.fur.com --port 2069 --allow-plaintext
+# Or a previously saved profile:
+.\aeon-mud-wezterm.bat connect local-mud
+```
+
+The launcher starts WezTerm in its own GUI window, running the existing Python
+client; the current directory is the repository directory. It checks for
+`python.exe` and `wezterm-gui.exe` on PATH, then common Windows install
+locations. If WezTerm is installed as a portable ZIP, set
+`AEON_WEZTERM_PATH` to its full `wezterm-gui.exe` path. Neither GUI nor
+client is installed into the repository.
+
+For direct PowerShell use, invoke `aeon-mud-wezterm.ps1` with the same arguments.
+All network and plaintext-consent behavior remains in the Python client.
+WezTerm provides the window, tabs, fonts and terminal emulation; Aeon MUD still
+owns its keyboard shortcuts and in-terminal UI. Exit with `Ctrl+]` or `Ctrl+C`.
+
 ## Profiles
 
 Saved profiles, known hosts, command history, secrets, and transcripts live
