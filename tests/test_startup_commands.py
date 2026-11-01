@@ -73,7 +73,7 @@ class StartupCommandTests(unittest.TestCase):
         controller, transport, _ = self.controller()
         controller.character_login = ("Merlin", "swordfish")
         newer = mock.Mock()
-        def replace(_timeout):
+        def replace(timeout):
             controller.install_connection(newer, mud.TelnetCodec())
         with mock.patch.object(controller.ready_for_commands, "wait", side_effect=replace):
             mud.send_character_login_after_ready(controller)
