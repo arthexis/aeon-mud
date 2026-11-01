@@ -101,8 +101,11 @@ class ConnectionTests(unittest.TestCase):
 
     def test_local_telnet_connect_and_reconnect(self):
         def respond(peer, _index):
-            # The client can send NAWS before Telnet negotiation.
-            peer.recv(256)
+            # The server requests NAWS before the client may send a size.
+            peer.sendall(bytes([mud.IAC, mud.DO, mud.TELNET_NAWS]))
+            response = peer.recv(256)
+            if bytes([mud.IAC, mud.WILL, mud.TELNET_NAWS]) not in response:
+                raise AssertionError("Client did not negotiate NAWS")
             for chunk in (b"log", b"in: "):
                 peer.sendall(chunk)
             # Keep the listener responsive for the next connection.
