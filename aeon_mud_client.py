@@ -1621,6 +1621,11 @@ class MudUi:
                     sys.stdout.write("\x1b[?1049l")
                 sys.stdout.flush()
             self.started = False
+            if self.original_stdout_mode is not None and os.name == "nt":
+                kernel32 = ctypes.windll.kernel32
+                handle = kernel32.GetStdHandle(-11)
+                kernel32.SetConsoleMode(handle, self.original_stdout_mode)
+                self.original_stdout_mode = None
 
     def _enable_vt(self) -> None:
         if os.name != "nt":
@@ -2390,7 +2395,7 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
         raise SystemExit(f"Could not connect to {connection_target_label(profile)}: {exc}") from exc
     try:
         run_sanity_checks(profile, initial_banner, args.accept_host_change, args.yes)
-    except Exception:
+    except BaseException:
         transport.close()
         raise
 
@@ -2406,9 +2411,10 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
         args=(stop, transcript, controller),
         daemon=True,
     )
-    reader = KeyReader()
+    reader: KeyReader | None = None
 
     try:
+        reader = KeyReader()
         ui.start()
         if initial_banner:
             transcript.write("recv", initial_banner)
@@ -2496,7 +2502,8 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
     finally:
         stop.set()
         controller.close()
-        reader.close()
+        if reader is not None:
+            reader.close()
         ui.close()
         if transcript.path:
             print(f"Log: {transcript.path}")
@@ -3065,7 +3072,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print("\nDisconnected (Ctrl+C).")
+        return 130
     return 0
 
 
