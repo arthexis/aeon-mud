@@ -10,7 +10,8 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.scripts]
-aeon-mud = "aeon_mud_client:main"
+aeon-mud = "aeon_mud.cli:main"
 
 [tool.setuptools]
 py-modules = ["aeon_mud_client"]
+packages = ["aeon_mud"]
