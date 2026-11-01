@@ -71,6 +71,68 @@ class CharacterLoginTests(unittest.TestCase):
             controller.observe_output("Username:\nPassword:")
             send.assert_not_called()
 
+    def test_first_login_prompts_stores_and_next_login_reuses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = self.profile()
+            profile.require_private_host = False
+            secret_store = mud.SecretStore(Path(tmp) / "secrets.json")
+            profile_store = mud.ProfileStore(Path(tmp) / "profiles.json")
+            key = mud.character_secret_key(profile, "Merlin")
+            transport = mock.Mock()
+            with (
+                mock.patch.object(mud.Dpapi, "available", return_value=True),
+                mock.patch.object(mud.Dpapi, "protect", side_effect=lambda data: b"sealed:" + data),
+                mock.patch.object(mud.Dpapi, "unprotect", side_effect=lambda data: data.split(b":", 1)[1]),
+                mock.patch.object(mud, "SecretStore", return_value=secret_store),
+                mock.patch.object(mud.getpass, "getpass", return_value="swordfish") as prompt,
+                mock.patch.object(mud, "open_session_transport",
+                                  return_value=(transport, mud.TelnetCodec(), "")),
+                mock.patch.object(mud, "run_sanity_checks"),
+                mock.patch.object(mud, "KeyReader") as reader,
+                mock.patch.object(mud, "MudUi"),
+                mock.patch.object(mud, "Transcript"),
+                mock.patch.object(mud.threading, "Thread"),
+            ):
+                reader.return_value.read_key.return_value = mud.Key("quit")
+                args = self.args("--login", "Merlin")
+                mud.session_loop(profile, args, on_connected=profile_store.set)
+                self.assertEqual(secret_store.get_password(key), "swordfish")
+                self.assertEqual(profile_store.get(profile.name).characters, ["Merlin"])
+                transport.sendall.assert_called_with(b"connect Merlin swordfish\\r\\n")
+                self.assertEqual(prompt.call_count, 1)
+                mud.session_loop(profile_store.get(profile.name), args)
+                self.assertEqual(prompt.call_count, 1)
+                self.assertEqual(transport.sendall.call_count, 2)
+
+    def test_secret_cli_manages_only_one_character(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            profile_store = mud.ProfileStore(Path(tmp) / "profiles.json")
+            profile_store.set(self.profile())
+            store = mud.SecretStore(Path(tmp) / "secrets.json")
+            set_args = mud.build_parser().parse_args(
+                ["secret", "set", "tapestries", "--character", "Merlin"]
+            )
+            clear_args = mud.build_parser().parse_args(
+                ["secret", "clear", "tapestries", "--character", "Merlin"]
+            )
+            with (
+                mock.patch.object(mud, "ProfileStore", return_value=profile_store),
+                mock.patch.object(mud, "SecretStore", return_value=store),
+                mock.patch.object(mud.Dpapi, "available", return_value=True),
+                mock.patch.object(mud.Dpapi, "protect", side_effect=lambda data: b"sealed:" + data),
+                mock.patch.object(mud.Dpapi, "unprotect", side_effect=lambda data: data.split(b":", 1)[1]),
+                mock.patch.object(mud.getpass, "getpass", return_value="pw"),
+            ):
+                mud.command_secret_set(set_args)
+                key = mud.character_secret_key(self.profile(), "Merlin")
+                store.set_password(mud.character_secret_key(self.profile(), "Gandalf"), "other")
+                self.assertEqual(store.get_password(key), "pw")
+                mud.command_secret_clear(clear_args)
+                self.assertIsNone(store.get_password(key))
+                self.assertEqual(
+                    store.get_password(mud.character_secret_key(self.profile(), "Gandalf")), "other"
+                )
+
     def test_existing_profile_can_store_multiple_character_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = mud.ProfileStore(Path(tmp) / "profiles.json")
