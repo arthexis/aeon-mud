@@ -2865,7 +2865,7 @@ def command_secret_set(args: argparse.Namespace) -> None:
         profile = resolve_secret_profile(args.profile)
         character = validate_character_name(args.character)
         password = args.password or getpass.getpass(f"Password for {character} on {profile.host}: ")
-        if not password or "\\r" in password or "\\n" in password:
+        if not password or "\r" in password or "\n" in password:
             raise SystemExit("Password must not be empty or contain a newline")
         SecretStore().set_password(character_secret_key(profile, character), password)
         if character not in profile.characters:
