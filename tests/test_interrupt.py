@@ -36,7 +36,7 @@ class InterruptTests(unittest.TestCase):
             mock.patch.object(session, "KeyReader", return_value=reader),
             mock.patch.object(session, "MudUi", return_value=ui),
             mock.patch.object(session, "Transcript", return_value=transcript),
-            mock.patch.object(threading.threading, "Thread") as receiver,
+            mock.patch.object(threading, "Thread") as receiver,
         ):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
