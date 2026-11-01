@@ -65,6 +65,19 @@ and CLI dispatch will move in subsequent increments; their behavior is
 unchanged here. Configuration files remain in their existing locations.
 The package still has no new runtime dependencies.
 
+## Package architecture — Increment 3
+
+The interactive client is now divided into four additional package modules:
+
+- `aeon_mud.input`: key events, keyboard reader, editable input layout
+- `aeon_mud.terminal`: watch rules, output rendering and dual input state
+- `aeon_mud.commands`: local slash commands, saved session settings, paste
+- `aeon_mud.session`: Telnet startup checks, controller, reconnection and interactive event loop
+
+`aeon_mud_client.py` keeps CLI command definitions, built-in self-test and
+compatibility re-exports. Launcher arguments, profile locations, encrypted
+credentials and the MUD protocol remain unchanged.
+
 ## Optional WezTerm GUI launcher (Windows)
 
 [WezTerm](https://wezterm.org/) is an **optional** terminal GUI host. The client
