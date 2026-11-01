@@ -5,6 +5,9 @@ on:
     paths:
       - "aeon_mud_client.py"
       - "tests/**"
+      - "aeon-mud-wezterm.ps1"
+      - "aeon-mud-wezterm.bat"
+      - "README.md"
       - ".github/workflows/python-self-test.yml"
   workflow_dispatch:
 
@@ -22,3 +25,31 @@ jobs:
         run: python aeon_mud_client.py self-test
       - name: Run loopback integration tests
         run: python -m unittest discover -s tests -v
+
+  wezterm-launcher:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate launcher syntax and usage
+        shell: powershell
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $PWD "aeon-mud-wezterm.ps1"),
+            [ref]$tokens,
+            [ref]$parseErrors
+          )
+          if ($parseErrors.Count -ne 0) {
+            throw "PowerShell launcher has syntax errors: $parseErrors"
+          }
+          $usage = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\aeon-mud-wezterm.ps1" 2>&1
+          $launcherCode = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          Write-Host "Launcher exit: $launcherCode; output: $usage"
+          if ($launcherCode -ne 2) {
+            throw "Expected usage exit code 2, got $launcherCode"
+          }
+          if (-not ($usage -match "Usage:")) {
+            throw "Expected usage instructions from launcher"
+          }
