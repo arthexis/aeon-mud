@@ -47,6 +47,24 @@ For this first increment, the package CLI delegates to the existing client
 module; internal modules migrate incrementally in later PRs. No runtime
 dependencies were added, and profile/credential paths remain unchanged.
 
+## Package architecture — Increment 2
+
+Infrastructure is now implemented in dedicated, standard-library-only modules:
+
+- `aeon_mud.config`: application paths, JSON persistence and host/port parsing
+- `aeon_mud.profiles`: server profiles, command history and known hosts
+- `aeon_mud.security`: Windows DPAPI and per-character encrypted secrets
+- `aeon_mud.telnet`: stateful Telnet negotiation codec
+- `aeon_mud.transport`: TCP, SOCKS5 and subprocess transports
+- `aeon_mud.terminal_text`: ANSI sanitization and stream decoding
+- `aeon_mud.transcript`: transcript writing and decryption
+
+`aeon_mud_client.py` re-exports the old public names to preserve existing
+commands, launchers, tests and consumers. Terminal rendering, session control
+and CLI dispatch will move in subsequent increments; their behavior is
+unchanged here. Configuration files remain in their existing locations.
+The package still has no new runtime dependencies.
+
 ## Optional WezTerm GUI launcher (Windows)
 
 [WezTerm](https://wezterm.org/) is an **optional** terminal GUI host. The client
