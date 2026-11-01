@@ -14,6 +14,20 @@ if (-not $python) {
     exit 1
 }
 
+# Help is a CLI-only operation. Print it here and do not resolve/start WezTerm.
+# This also works when WezTerm is missing or AEON_WEZTERM_PATH is invalid.
+$client = Join-Path $PSScriptRoot "aeon_mud_client.py"
+$helpRequested = ($args.Count -gt 0 -and $args[0] -eq "help") -or
+    (@($args | Where-Object { $_ -in @("-h", "--help") }).Count -gt 0)
+if ($helpRequested) {
+    if (-not (Test-Path -LiteralPath $client -PathType Leaf)) {
+        Write-Host "Aeon MUD client not found: $client" -ForegroundColor Red
+        exit 1
+    }
+    & $python.Source $client @args
+    exit $LASTEXITCODE
+}
+
 # CLI executables surface errors in the caller's console. The GUI binary doesn't.
 # Prefer the CLI even when only the GUI binary was discovered on PATH.
 $potential = @()

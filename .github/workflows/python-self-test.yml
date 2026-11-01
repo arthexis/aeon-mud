@@ -78,6 +78,27 @@ jobs:
           if (-not ($usage -match "Usage:")) {
             throw "Expected usage instructions from launcher"
           }
+      - name: Help stays in the current shell without WezTerm
+        shell: powershell
+        run: |
+          $env:AEON_WEZTERM_PATH = Join-Path $env:RUNNER_TEMP "missing-wezterm.exe"
+          foreach ($arguments in @(
+            @("-h"),
+            @("--help"),
+            @("help"),
+            @("connect", "-h"),
+            @("connect", "--help"),
+            @("help", "connect"),
+            @("help", "profile", "list")
+          )) {
+            $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\aeon-mud-wezterm.ps1" @arguments 2>&1
+            $code = $LASTEXITCODE
+            $result = $output | Out-String
+            Write-Host "Arguments: $($arguments -join ' '); exit: $code; output: $result"
+            if ($code -ne 0 -or $result -notmatch "usage:" -or $result -match "Launching Aeon MUD in WezTerm|WezTerm was not found") {
+              throw "Help must print usage directly without starting WezTerm"
+            }
+          }
       - name: Launcher reports executable failures
         shell: powershell
         run: |
