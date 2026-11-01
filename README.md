@@ -51,6 +51,13 @@ locations. If WezTerm is installed as a portable ZIP, set
 `AEON_WEZTERM_PATH` to its full `wezterm-gui.exe` path. Neither GUI nor
 client is installed into the repository.
 
+If the launcher prints no error but no window appears, use a new PowerShell session
+after installing with Winget, then run `wezterm.exe start` to check the
+WezTerm installation directly. The launcher now prints the resolved executable
+path, its launch status and any CLI errors. You can override executable
+discovery with `$env:AEON_WEZTERM_PATH = "C:\\Program Files\\WezTerm\\wezterm.exe"`.
+WezTerm's CLI delegates to its GUI executable and surfaces useful errors.
+
 For direct PowerShell use, invoke `aeon-mud-wezterm.ps1` with the same arguments.
 All network and plaintext-consent behavior remains in the Python client.
 WezTerm provides the window, tabs, fonts and terminal emulation; Aeon MUD still
