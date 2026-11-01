@@ -60,10 +60,12 @@ jobs:
         shell: powershell
         run: |
           # Simulate a broken WezTerm executable without requiring a GUI runner.
-          $env:AEON_WEZTERM_PATH = Join-Path $env:WINDIR "System32\where.exe"
+          $env:AEON_WEZTERM_PATH = Join-Path $env:pythonLocation "python.exe"
+          $ErrorActionPreference = "Continue"
           $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\aeon-mud-wezterm.ps1" connect example 2>&1
           $launchCode = $LASTEXITCODE
           $global:LASTEXITCODE = 0
+          $ErrorActionPreference = "Stop"
           Write-Host "Simulated failed launch: $launchCode"
           Write-Host ($output | Out-String)
           if ($launchCode -eq 0) {
