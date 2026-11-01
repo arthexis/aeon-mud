@@ -7,7 +7,8 @@ if ($args.Count -eq 0) {
     exit 2
 }
 
-$python = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue
+# Get-Command can return multiple installations; select exactly one executable.
+$python = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $python) {
     Write-Host "Python is required. Install Python and make python.exe available in PATH." -ForegroundColor Red
     exit 1
