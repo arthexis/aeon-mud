@@ -6,7 +6,7 @@ from unittest import mock
 
 
 import threading
-from aeon_mud import cli, input as keyboard, session, telnet, terminal, transcript, transport
+from aeon_mud import cli, input as keyboard, session, telnet, terminal, transcript, transport as transport_module
 
 
 
@@ -21,7 +21,7 @@ class InterruptTests(unittest.TestCase):
         self.assertEqual(output.getvalue(), "\nDisconnected (Ctrl+C).\n")
 
     def test_ctrl_c_in_keyboard_loop_closes_everything(self):
-        transport = mock.MagicMock(spec=transport.Transport)
+        transport = mock.MagicMock(spec=transport_module.Transport)
         reader = mock.MagicMock(spec=keyboard.KeyReader)
         reader.read_key.side_effect = KeyboardInterrupt
         ui = mock.MagicMock(spec=terminal.MudUi)
@@ -49,7 +49,7 @@ class InterruptTests(unittest.TestCase):
         receiver.return_value.start.assert_called_once()
 
     def test_ctrl_c_while_validating_closes_socket(self):
-        transport = mock.MagicMock(spec=transport.Transport)
+        transport = mock.MagicMock(spec=transport_module.Transport)
         with (
             mock.patch.object(session, "is_private_target", return_value=True),
             mock.patch.object(session, "open_session_transport", return_value=(transport, telnet.TelnetCodec(), "")),
