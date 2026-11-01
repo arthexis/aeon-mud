@@ -91,7 +91,9 @@ jobs:
         run: |
           $python = (Get-Command python.exe -CommandType Application).Source
           $session = Join-Path $PWD "aeon-mud-wezterm-session.ps1"
-          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session $python "-c" "import sys; print('PASSED_ARGS=' + repr(sys.argv[1:]))" "two words" "--port" "2069" 2>&1
+          $probe = Join-Path $env:RUNNER_TEMP "aeon-mud-probe.py"
+          Set-Content -LiteralPath $probe -Encoding ASCII -Value "import sys; print('PASSED_ARGS=' + repr(sys.argv[1:])); sys.exit(7 if '--exit-seven' in sys.argv else 0)"
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session $python $probe "two words" "--port" "2069" 2>&1
           $code = $LASTEXITCODE
           $global:LASTEXITCODE = 0
           $result = $output | Out-String
@@ -99,7 +101,7 @@ jobs:
           if ($code -ne 0 -or $result -notmatch "two words" -or $result -notmatch "2069" -or $result -notmatch "ended normally") {
             throw "Session wrapper failed to forward arguments"
           }
-          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session $python "-c" "import sys; sys.exit(7)" 2>&1
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $session $python $probe "--exit-seven" 2>&1
           $code = $LASTEXITCODE
           $global:LASTEXITCODE = 0
           $result = $output | Out-String
