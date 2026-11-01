@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import aeon_mud_client as mud
+from aeon_mud import session
 
 
 class CharacterLoginTests(unittest.TestCase):
@@ -83,14 +84,14 @@ class CharacterLoginTests(unittest.TestCase):
                 mock.patch.object(mud.Dpapi, "available", return_value=True),
                 mock.patch.object(mud.Dpapi, "protect", side_effect=lambda data: b"sealed:" + data),
                 mock.patch.object(mud.Dpapi, "unprotect", side_effect=lambda data: data.split(b":", 1)[1]),
-                mock.patch.object(mud, "SecretStore", return_value=secret_store),
+                mock.patch.object(session, "SecretStore", return_value=secret_store),
                 mock.patch.object(mud.getpass, "getpass", return_value="swordfish") as prompt,
-                mock.patch.object(mud, "open_session_transport",
+                mock.patch.object(session, "open_session_transport",
                                   return_value=(transport, mud.TelnetCodec(), "ready")),
-                mock.patch.object(mud, "run_sanity_checks"),
-                mock.patch.object(mud, "KeyReader") as reader,
-                mock.patch.object(mud, "MudUi"),
-                mock.patch.object(mud, "Transcript"),
+                mock.patch.object(session, "run_sanity_checks"),
+                mock.patch.object(session, "KeyReader") as reader,
+                mock.patch.object(session, "MudUi"),
+                mock.patch.object(session, "Transcript"),
                 mock.patch.object(mud.threading, "Thread") as thread,
             ):
                 # Run the deferred login worker synchronously, without

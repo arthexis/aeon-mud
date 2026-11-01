@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import aeon_mud_client as mud
+from aeon_mud import session
 
 
 class AutoProfileTests(unittest.TestCase):
@@ -64,13 +65,13 @@ class AutoProfileTests(unittest.TestCase):
         args = self.args("--host", "example.test", "--port", "2069")
         transport = mock.MagicMock()
         with (
-            mock.patch.object(mud, "is_private_target", return_value=False),
-            mock.patch.object(mud, "prompt_yes_no", return_value=True) as prompt,
-            mock.patch.object(mud, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
-            mock.patch.object(mud, "run_sanity_checks"),
-            mock.patch.object(mud, "KeyReader", side_effect=KeyboardInterrupt),
-            mock.patch.object(mud, "MudUi"),
-            mock.patch.object(mud, "Transcript"),
+            mock.patch.object(session, "is_private_target", return_value=False),
+            mock.patch.object(session, "prompt_yes_no", return_value=True) as prompt,
+            mock.patch.object(session, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
+            mock.patch.object(session, "run_sanity_checks"),
+            mock.patch.object(session, "KeyReader", side_effect=KeyboardInterrupt),
+            mock.patch.object(session, "MudUi"),
+            mock.patch.object(session, "Transcript"),
         ):
             with self.assertRaises(KeyboardInterrupt):
                 mud.session_loop(profile, args, on_connected=self.store.set)
@@ -86,9 +87,9 @@ class AutoProfileTests(unittest.TestCase):
                               approved_public_endpoint="example.test:2069")
         args = self.args("--host", "example.test", "--port", "2070")
         with (
-            mock.patch.object(mud, "is_private_target", return_value=False),
-            mock.patch.object(mud, "prompt_yes_no", return_value=False) as prompt,
-            mock.patch.object(mud, "open_session_transport") as connect,
+            mock.patch.object(session, "is_private_target", return_value=False),
+            mock.patch.object(session, "prompt_yes_no", return_value=False) as prompt,
+            mock.patch.object(session, "open_session_transport") as connect,
         ):
             with self.assertRaisesRegex(SystemExit, "aborted"):
                 mud.session_loop(profile, args)

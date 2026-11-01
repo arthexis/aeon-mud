@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 import aeon_mud_client as mud
+from aeon_mud import session
 
 
 class InterruptTests(unittest.TestCase):
@@ -27,12 +28,12 @@ class InterruptTests(unittest.TestCase):
         transcript.path = None
 
         with (
-            mock.patch.object(mud, "is_private_target", return_value=True),
-            mock.patch.object(mud, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
-            mock.patch.object(mud, "run_sanity_checks"),
-            mock.patch.object(mud, "KeyReader", return_value=reader),
-            mock.patch.object(mud, "MudUi", return_value=ui),
-            mock.patch.object(mud, "Transcript", return_value=transcript),
+            mock.patch.object(session, "is_private_target", return_value=True),
+            mock.patch.object(session, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
+            mock.patch.object(session, "run_sanity_checks"),
+            mock.patch.object(session, "KeyReader", return_value=reader),
+            mock.patch.object(session, "MudUi", return_value=ui),
+            mock.patch.object(session, "Transcript", return_value=transcript),
             mock.patch.object(mud.threading, "Thread") as receiver,
         ):
             output = io.StringIO()
@@ -48,9 +49,9 @@ class InterruptTests(unittest.TestCase):
     def test_ctrl_c_while_validating_closes_socket(self):
         transport = mock.MagicMock(spec=mud.Transport)
         with (
-            mock.patch.object(mud, "is_private_target", return_value=True),
-            mock.patch.object(mud, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
-            mock.patch.object(mud, "run_sanity_checks", side_effect=KeyboardInterrupt),
+            mock.patch.object(session, "is_private_target", return_value=True),
+            mock.patch.object(session, "open_session_transport", return_value=(transport, mud.TelnetCodec(), "")),
+            mock.patch.object(session, "run_sanity_checks", side_effect=KeyboardInterrupt),
         ):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):

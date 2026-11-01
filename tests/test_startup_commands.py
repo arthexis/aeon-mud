@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 import aeon_mud_client as mud
+from aeon_mud import session
 
 
 class StartupCommandTests(unittest.TestCase):
@@ -23,7 +24,7 @@ class StartupCommandTests(unittest.TestCase):
 
     def test_no_unsolicited_naws_on_new_connection(self):
         transport = mock.Mock()
-        with mock.patch.object(mud, "make_transport", return_value=transport):
+        with mock.patch.object(session, "make_transport", return_value=transport):
             returned, codec, banner = mud.open_session_transport(self.profile())
         self.assertIs(returned, transport)
         transport.sendall.assert_not_called()
