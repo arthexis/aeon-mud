@@ -6,7 +6,7 @@ from unittest import mock
 
 
 import threading
-from aeon_mud import cli, input as keyboard, session, telnet, terminal, transcript, transport as transport_module
+from aeon_mud import cli, input as keyboard, session, telnet, terminal, transcript as transcript_module, transport as transport_module
 
 
 
@@ -26,7 +26,7 @@ class InterruptTests(unittest.TestCase):
         reader.read_key.side_effect = KeyboardInterrupt
         ui = mock.MagicMock(spec=terminal.MudUi)
         ui.started = True
-        transcript = mock.MagicMock(spec=transcript.Transcript)
+        transcript = mock.MagicMock(spec=transcript_module.Transcript)
         transcript.path = None
 
         with (
