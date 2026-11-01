@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import codecs
 import ctypes
 import getpass
 import hashlib
@@ -26,6 +27,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -46,6 +48,7 @@ FAST_PAGE_SCROLL_PAGES = 3
 SESSION_PROFILE_FORMAT = "aeon-mud-session-profile"
 SESSION_PROFILE_VERSION = 1
 MAX_INITIAL_BANNER_BYTES = 8192
+MAX_TELNET_SUBNEGOTIATION_BYTES = 8192
 OUTBOUND_BUFFER_CHARS = 1024
 OUTBOUND_SPOOF_PREFIX = "spoof "
 RUNTIME_PROFILE_FIELDS = (
@@ -481,6 +484,61 @@ def sanitize_terminal_text(text: str) -> str:
     return text
 
 
+
+class TerminalStreamDecoder:
+    """Decode fragmented text and allow only complete, safe SGR sequences."""
+
+    def __init__(self, encoding: str) -> None:
+        self.decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
+        self.state = "text"
+        self.escape = ""
+        self.max_escape = 128
+
+    def feed(self, data: bytes) -> str:
+        result: list[str] = []
+        for char in self.decoder.decode(data):
+            if self.state == "text":
+                if char == "\x1b":
+                    self.state = "esc"
+                elif char not in ("\x7f",) and not ("\x80" <= char <= "\x9f"):
+                    result.append(char)
+            elif self.state == "esc":
+                if char == "[":
+                    self.state = "csi"
+                    self.escape = ""
+                elif char == "]":
+                    self.state = "osc"
+                elif char in ("P", "X", "^", "_"):
+                    self.state = "string"
+                else:
+                    self.state = "text"
+            elif self.state == "csi":
+                if "@" <= char <= "~":
+                    if char == "m" and re.fullmatch(r"[0-9;]*", self.escape):
+                        result.append("\x1b[" + self.escape + "m")
+                    self.state = "text"
+                    self.escape = ""
+                elif len(self.escape) >= self.max_escape:
+                    self.state = "discard_csi"
+                    self.escape = ""
+                else:
+                    self.escape += char
+            elif self.state == "discard_csi":
+                if "@" <= char <= "~":
+                    self.state = "text"
+            elif self.state in ("osc", "string"):
+                if char == "\x07" and self.state == "osc":
+                    self.state = "text"
+                elif char == "\x1b":
+                    self.state = "string_esc" if self.state == "string" else "osc_esc"
+            elif self.state in ("osc_esc", "string_esc"):
+                if char == "\\":
+                    self.state = "text"
+                elif char != "\x1b":
+                    self.state = "osc" if self.state == "osc_esc" else "string"
+        return "".join(result)
+
+
 def strip_ansi(text: str) -> str:
     return ANSI_CSI_RE.sub("", ANSI_OSC_RE.sub("", text))
 
@@ -682,6 +740,7 @@ class TelnetCodec:
         self.state = "data"
         self.command = 0
         self.sb_data = bytearray()
+        self.sb_overflow = False
         self.terminal_type = terminal_type.encode("ascii", "replace")[:40] or b"ANSI"
         self.width = 100
         self.height = 30
@@ -709,6 +768,7 @@ class TelnetCodec:
                     self.state = "option"
                 elif byte == SB:
                     self.sb_data = bytearray()
+                    self.sb_overflow = False
                     self.state = "sb"
                 else:
                     self.state = "data"
@@ -718,15 +778,27 @@ class TelnetCodec:
             elif self.state == "sb":
                 if byte == IAC:
                     self.state = "sb_iac"
-                else:
-                    self.sb_data.append(byte)
+                elif not self.sb_overflow:
+                    if len(self.sb_data) < MAX_TELNET_SUBNEGOTIATION_BYTES:
+                        self.sb_data.append(byte)
+                    else:
+                        self.sb_overflow = True
+                        self.sb_data.clear()
             elif self.state == "sb_iac":
                 if byte == SE:
-                    responses.extend(self._subnegotiate(bytes(self.sb_data)))
+                    if not self.sb_overflow:
+                        responses.extend(self._subnegotiate(bytes(self.sb_data)))
+                    self.sb_data.clear()
+                    self.sb_overflow = False
                     self.state = "data"
                 else:
-                    self.sb_data.append(IAC)
-                    self.sb_data.append(byte)
+                    if not self.sb_overflow:
+                        escaped = (IAC,) if byte == IAC else (IAC, byte)
+                        if len(self.sb_data) + len(escaped) <= MAX_TELNET_SUBNEGOTIATION_BYTES:
+                            self.sb_data.extend(escaped)
+                        else:
+                            self.sb_overflow = True
+                            self.sb_data.clear()
                     self.state = "sb"
         return bytes(output), bytes(responses)
 
@@ -801,7 +873,7 @@ class ProcessTransport(Transport):
             command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             bufsize=0,
         )
 
@@ -1006,13 +1078,20 @@ def open_session_transport(profile: Profile) -> tuple[Transport, TelnetCodec, st
     return transport, codec, initial_banner
 
 
-def run_sanity_checks(profile: Profile, banner: str, accept_host_change: bool, assume_yes: bool) -> None:
+def run_sanity_checks(
+    profile: Profile, banner: str, accept_host_change: bool, assume_yes: bool,
+    *, interactive: bool = True,
+) -> None:
+    if profile.expected_banner and not banner and profile.sanity_timeout > 0 and not interactive:
+        raise ValueError("Expected banner was absent on reconnect")
     if profile.expected_banner and banner:
         try:
             matched = re.search(profile.expected_banner, strip_ansi(banner), re.MULTILINE) is not None
         except re.error as exc:
             raise SystemExit(f"Invalid expected_banner regex for {profile.label()}: {exc}") from exc
         if not matched:
+            if not interactive:
+                raise ValueError("Expected banner did not match on reconnect")
             sample = strip_ansi(banner).replace("\n", " ")[:300]
             ok = prompt_yes_no(
                 f"Expected banner did not match for {profile.target_key()}. Saw: {sample!r}. Continue?",
@@ -1029,6 +1108,8 @@ def run_sanity_checks(profile: Profile, banner: str, accept_host_change: bool, a
     current_hash = hashlib.sha256(banner.encode("utf-8", "replace")).hexdigest()
     existing = known.get(key)
     if existing and existing.get("banner_sha256") != current_hash and not accept_host_change:
+        if not interactive:
+            raise ValueError("Known host banner changed on reconnect")
         ok = prompt_yes_no(
             f"Initial banner changed for profile {profile.label()}. Continue and trust this banner?",
             default=False,
@@ -1985,9 +2066,16 @@ def reconnect_session(
                 if sleep_until_stop(stop, delay):
                     return False
             ui.set_status(f"Reconnecting to {target} (attempt {attempt})")
+            transport = None
             try:
+                if profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
+                    if not is_private_target(profile.host):
+                        raise ValueError("Target no longer resolves exclusively to private addresses")
                 transport, codec, initial_banner = open_session_transport(profile)
+                run_sanity_checks(profile, initial_banner, False, False, interactive=False)
             except Exception as exc:
+                if transport is not None:
+                    transport.close()
                 ui.set_status(f"Reconnect failed: {exc}")
                 attempt += 1
                 delay = min(max_delay, max(1.0, delay * 2 if delay else 1.0))
@@ -2010,6 +2098,8 @@ def receiver_loop(
     transcript: Transcript,
     controller: SessionController,
 ) -> None:
+    decoder: TerminalStreamDecoder | None = None
+    active_transport: Transport | None = None
     while not stop.is_set():
         connection = controller.current_connection()
         if connection is None:
@@ -2017,6 +2107,9 @@ def receiver_loop(
                 break
             continue
         transport, codec = connection
+        if transport is not active_transport:
+            active_transport = transport
+            decoder = TerminalStreamDecoder(controller.profile.encoding)
         try:
             data = transport.recv(4096)
         except OSError as exc:
@@ -2044,7 +2137,8 @@ def receiver_loop(
                     break
                 continue
         if output:
-            text = sanitize_terminal_text(output.decode(controller.profile.encoding, "replace"))
+            assert decoder is not None
+            text = decoder.feed(output)
             transcript.write("recv", text)
             controller.ui.append_output(text)
             controller.observe_output(text)
@@ -2538,6 +2632,29 @@ def command_self_test(_args: argparse.Namespace) -> None:
     assert "\x1b[31m" in sanitized
     assert "\x1b[2J" not in sanitized
 
+
+    # Fragmentation must not leak terminal controls or corrupt UTF-8.
+    for split in range(1, len(b"hello\x1b]52;c;secret\x1b\\world")):
+        payload = b"hello\x1b]52;c;secret\x1b\\world"
+        dec = TerminalStreamDecoder("utf-8")
+        assert dec.feed(payload[:split]) + dec.feed(payload[split:]) == "helloworld"
+    dec = TerminalStreamDecoder("utf-8")
+    unicode_bytes = "café".encode("utf-8")
+    assert dec.feed(unicode_bytes[:-1]) == "caf"
+    assert dec.feed(unicode_bytes[-1:]) == "é"
+    dec = TerminalStreamDecoder("utf-8")
+    assert dec.feed(b"red\x1b[31") == "red"
+    assert dec.feed(b"mtext\x1b[2J") == "\x1b[31mtext"
+    codec = TelnetCodec()
+    payload = bytes([IAC, SB, TELNET_TTYPE, TTYPE_SEND]) + b"x" * (MAX_TELNET_SUBNEGOTIATION_BYTES + 1)
+    for part in (payload[:7], payload[7:], bytes([IAC, SE]) + b"ok"):
+        output, response = codec.feed(part)
+    assert output == b"ok" and response == b""
+    assert codec.sb_data == bytearray() and not codec.sb_overflow
+    codec = TelnetCodec()
+    output, response = codec.feed(bytes([IAC, SB, TELNET_TTYPE, TTYPE_SEND, IAC, SE]))
+    assert b"ANSI" in response and output == b""
+
     wrapped = wrap_ansi("abcdef", 3)
     assert wrapped == ["abc", "def"], wrapped
     colored = wrap_ansi("\x1b[31mred words\x1b[0m", 5)
@@ -2620,6 +2737,23 @@ def command_self_test(_args: argparse.Namespace) -> None:
     assert decoded.reconnect is True
     assert decoded.reconnect_initial_delay == DEFAULT_RECONNECT_INITIAL_DELAY
     assert decoded.reconnect_max_delay == DEFAULT_RECONNECT_MAX_DELAY
+
+
+    strict_profile = Profile(name="strict", host="127.0.0.1", expected_banner="login", sanity_timeout=0.1)
+    with tempfile.TemporaryDirectory() as sanity_dir:
+        with mock.patch(__name__ + ".known_hosts_path", return_value=Path(sanity_dir) / "known.json"):
+            run_sanity_checks(strict_profile, "login", False, False, interactive=False)
+            for bad_banner in ("", "wrong"):
+                try:
+                    run_sanity_checks(strict_profile, bad_banner, False, False, interactive=False)
+                    raise AssertionError("Reconnect accepted an invalid banner")
+                except ValueError:
+                    pass
+            try:
+                run_sanity_checks(strict_profile, "login changed", False, False, interactive=False)
+                raise AssertionError("Reconnect accepted changed host banner")
+            except ValueError:
+                pass
 
     assert prompt_yes_no("continue", default=True, input_func=lambda _message: "") is True
 
