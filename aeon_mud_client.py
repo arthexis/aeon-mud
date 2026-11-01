@@ -27,6 +27,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -531,7 +532,7 @@ class TerminalStreamDecoder:
                 elif char == "\x1b":
                     self.state = "string_esc" if self.state == "string" else "osc_esc"
             elif self.state in ("osc_esc", "string_esc"):
-                if char == "\\\\":
+                if char == "\\":
                     self.state = "text"
                 elif char != "\x1b":
                     self.state = "osc" if self.state == "osc_esc" else "string"
@@ -2633,7 +2634,7 @@ def command_self_test(_args: argparse.Namespace) -> None:
 
 
     # Fragmentation must not leak terminal controls or corrupt UTF-8.
-    for split in range(1, len(b"hello\x1b]52;c;secret\x1b\\\\world") ):
+    for split in range(1, len(b"hello\x1b]52;c;secret\x1b\\world")):
         payload = b"hello\x1b]52;c;secret\x1b\\\\world"
         dec = TerminalStreamDecoder("utf-8")
         assert dec.feed(payload[:split]) + dec.feed(payload[split:]) == "helloworld"
@@ -2650,6 +2651,9 @@ def command_self_test(_args: argparse.Namespace) -> None:
         output, response = codec.feed(part)
     assert output == b"ok" and response == b""
     assert codec.sb_data == bytearray() and not codec.sb_overflow
+    codec = TelnetCodec()
+    output, response = codec.feed(bytes([IAC, SB, TELNET_TTYPE, TTYPE_SEND, IAC, SE]))
+    assert b"ANSI" in response and output == b""
 
     wrapped = wrap_ansi("abcdef", 3)
     assert wrapped == ["abc", "def"], wrapped
@@ -2736,13 +2740,20 @@ def command_self_test(_args: argparse.Namespace) -> None:
 
 
     strict_profile = Profile(name="strict", host="127.0.0.1", expected_banner="login", sanity_timeout=0.1)
-    run_sanity_checks(strict_profile, "login", False, False, interactive=False)
-    for bad_banner in ("", "wrong"):
-        try:
-            run_sanity_checks(strict_profile, bad_banner, False, False, interactive=False)
-            raise AssertionError("Reconnect accepted an invalid banner")
-        except ValueError:
-            pass
+    with tempfile.TemporaryDirectory() as sanity_dir:
+        with mock.patch(__name__ + ".known_hosts_path", return_value=Path(sanity_dir) / "known.json"):
+            run_sanity_checks(strict_profile, "login", False, False, interactive=False)
+            for bad_banner in ("", "wrong"):
+                try:
+                    run_sanity_checks(strict_profile, bad_banner, False, False, interactive=False)
+                    raise AssertionError("Reconnect accepted an invalid banner")
+                except ValueError:
+                    pass
+            try:
+                run_sanity_checks(strict_profile, "login changed", False, False, interactive=False)
+                raise AssertionError("Reconnect accepted changed host banner")
+            except ValueError:
+                pass
 
     assert prompt_yes_no("continue", default=True, input_func=lambda _message: "") is True
 
