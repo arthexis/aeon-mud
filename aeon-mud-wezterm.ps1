@@ -14,17 +14,17 @@ if (-not $python) {
     exit 1
 }
 
-# Help is a CLI-only operation. Print it here and do not resolve/start WezTerm.
-# This also works when WezTerm is missing or AEON_WEZTERM_PATH is invalid.
-$client = Join-Path $PSScriptRoot "aeon_mud_client.py"
-$helpRequested = ($args.Count -gt 0 -and $args[0] -eq "help") -or
-    (@($args | Where-Object { $_ -in @("-h", "--help") }).Count -gt 0)
+# Reuse the plain Windows launcher for help, regardless of argument order.
+# Python's canonical CLI normalizes "help", "-h" and "--help" into the
+# requested command or nested subcommand help. WezTerm is never started.
+$helpRequested = @($args | Where-Object { $_ -in @("help", "-h", "--help") }).Count -gt 0
 if ($helpRequested) {
-    if (-not (Test-Path -LiteralPath $client -PathType Leaf)) {
-        Write-Host "Aeon MUD client not found: $client" -ForegroundColor Red
+    $plainLauncher = Join-Path $PSScriptRoot "aeon-mud.bat"
+    if (-not (Test-Path -LiteralPath $plainLauncher -PathType Leaf)) {
+        Write-Host "Aeon MUD launcher not found: $plainLauncher" -ForegroundColor Red
         exit 1
     }
-    & $python.Source $client @args
+    & $plainLauncher @args
     exit $LASTEXITCODE
 }
 
