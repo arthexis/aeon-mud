@@ -89,7 +89,7 @@ jobs:
       - name: Session wrapper preserves errors and argument boundaries
         shell: powershell
         run: |
-          $python = (Get-Command python.exe -CommandType Application).Source
+          $python = (Get-Command python.exe -CommandType Application | Select-Object -First 1).Source
           $session = Join-Path $PWD "aeon-mud-wezterm-session.ps1"
           $probe = Join-Path $env:RUNNER_TEMP "aeon-mud-probe.py"
           Set-Content -LiteralPath $probe -Encoding ASCII -Value "import sys; print('PASSED_ARGS=' + repr(sys.argv[1:])); sys.exit(7 if '--exit-seven' in sys.argv else 0)"
