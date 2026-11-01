@@ -30,6 +30,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Validate launcher syntax and usage
         shell: powershell
         run: |
@@ -52,4 +55,25 @@ jobs:
           }
           if (-not ($usage -match "Usage:")) {
             throw "Expected usage instructions from launcher"
+          }
+      - name: Launcher reports executable failures
+        shell: powershell
+        run: |
+          # Simulate a broken WezTerm executable without requiring a GUI runner.
+          $env:AEON_WEZTERM_PATH = Join-Path $env:pythonLocation "python.exe"
+          $ErrorActionPreference = "Continue"
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\aeon-mud-wezterm.ps1" connect example 2>&1
+          $launchCode = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          $ErrorActionPreference = "Stop"
+          Write-Host "Simulated failed launch: $launchCode"
+          Write-Host ($output | Out-String)
+          if ($launchCode -eq 0) {
+            throw "Expected the simulated failed executable to fail"
+          }
+          if (-not (($output | Out-String) -match "Launching Aeon MUD in WezTerm")) {
+            throw "Launcher did not print its startup diagnostic"
+          }
+          if (-not (($output | Out-String) -match "exited with code|launch failed")) {
+            throw "Launcher did not print a useful failure diagnostic"
           }
