@@ -39,6 +39,21 @@ class PackageEntrypointTests(unittest.TestCase):
                 self.assertEqual(run.returncode, 0, run.stderr)
                 self.assertIn("Self-test passed", run.stdout)
 
+    def test_help_alias_matches_argparse_help(self):
+        for argv, expected in (
+            (["help"], "connect"),
+            (["help", "connect"], "--login"),
+            (["help", "profile", "list"], "list"),
+        ):
+            with self.subTest(argv=argv):
+                run = subprocess.run(
+                    [sys.executable, "-m", "aeon_mud", *argv],
+                    cwd=ROOT, capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertIn("usage:", run.stdout)
+                self.assertIn(expected, run.stdout)
+
     def test_module_help_contains_connect(self):
         run = subprocess.run(
             [sys.executable, "-m", "aeon_mud", "--help"],
