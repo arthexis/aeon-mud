@@ -40,10 +40,21 @@ class PackageEntrypointTests(unittest.TestCase):
                 self.assertIn("Self-test passed", run.stdout)
 
     def test_help_alias_matches_argparse_help(self):
-        for argv, expected in (
-            (["help"], "connect"),
-            (["help", "connect"], "--login"),
-            (["help", "profile", "list"], "list"),
+        # Every supported form should resolve to the same nested argparse help.
+        for argv, expected_usage in (
+            (["help"], "usage: __main__.py [-h]"),
+            (["-h"], "usage: __main__.py [-h]"),
+            (["-h", "connect"], "usage: __main__.py connect"),
+            (["--help", "connect"], "usage: __main__.py connect"),
+            (["connect", "help"], "usage: __main__.py connect"),
+            (["connect", "-h"], "usage: __main__.py connect"),
+            (["help", "connect"], "usage: __main__.py connect"),
+            (["help", "profile", "list"], "usage: __main__.py profile list"),
+            (["profile", "help", "list"], "usage: __main__.py profile list"),
+            (["profile", "list", "help"], "usage: __main__.py profile list"),
+            (["-h", "secret", "set"], "usage: __main__.py secret set"),
+            (["history", "clear", "help"], "usage: __main__.py history clear"),
+            (["transcript", "decrypt", "--help"], "usage: __main__.py transcript decrypt"),
         ):
             with self.subTest(argv=argv):
                 run = subprocess.run(
@@ -51,8 +62,16 @@ class PackageEntrypointTests(unittest.TestCase):
                     cwd=ROOT, capture_output=True, text=True, timeout=30,
                 )
                 self.assertEqual(run.returncode, 0, run.stderr)
-                self.assertIn("usage:", run.stdout)
-                self.assertIn(expected, run.stdout)
+                self.assertIn(expected_usage, run.stdout)
+                self.assertNotIn("invalid choice", run.stderr)
+
+    def test_help_normalizer_preserves_nonhelp_commands(self):
+        self.assertEqual(
+            cli.normalize_help_argv(["connect", "tapestries", "--login", "Merlin"]),
+            ["connect", "tapestries", "--login", "Merlin"],
+        )
+        self.assertEqual(cli.normalize_help_argv(["connect", "help"]), ["connect", "--help"])
+        self.assertEqual(cli.normalize_help_argv(["-h", "connect"]), ["connect", "--help"])
 
     def test_module_help_contains_connect(self):
         run = subprocess.run(

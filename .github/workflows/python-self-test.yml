@@ -78,25 +78,37 @@ jobs:
           if (-not ($usage -match "Usage:")) {
             throw "Expected usage instructions from launcher"
           }
-      - name: Help stays in the current shell without WezTerm
+      - name: Plain and WezTerm launchers share nested help in existing shell
         shell: powershell
         run: |
+          # A bad WezTerm path must have no effect on help handling.
           $env:AEON_WEZTERM_PATH = Join-Path $env:RUNNER_TEMP "missing-wezterm.exe"
-          foreach ($arguments in @(
-            @("-h"),
-            @("--help"),
-            @("help"),
-            @("connect", "-h"),
-            @("connect", "--help"),
-            @("help", "connect"),
-            @("help", "profile", "list")
-          )) {
-            $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\aeon-mud-wezterm.ps1" @arguments 2>&1
-            $code = $LASTEXITCODE
-            $result = $output | Out-String
-            Write-Host "Arguments: $($arguments -join ' '); exit: $code; output: $result"
-            if ($code -ne 0 -or $result -notmatch "usage:" -or $result -match "Launching Aeon MUD in WezTerm|WezTerm was not found") {
-              throw "Help must print usage directly without starting WezTerm"
+          $cases = @(
+            @{ Args = @("-h"); Usage = "usage: aeon_mud_client.py [-h]" },
+            @{ Args = @("--help"); Usage = "usage: aeon_mud_client.py [-h]" },
+            @{ Args = @("help"); Usage = "usage: aeon_mud_client.py [-h]" },
+            @{ Args = @("-h", "connect"); Usage = "usage: aeon_mud_client.py connect" },
+            @{ Args = @("connect", "help"); Usage = "usage: aeon_mud_client.py connect" },
+            @{ Args = @("connect", "-h"); Usage = "usage: aeon_mud_client.py connect" },
+            @{ Args = @("help", "profile", "list"); Usage = "usage: aeon_mud_client.py profile list" },
+            @{ Args = @("profile", "list", "help"); Usage = "usage: aeon_mud_client.py profile list" },
+            @{ Args = @("secret", "set", "help"); Usage = "usage: aeon_mud_client.py secret set" }
+          )
+          foreach ($case in $cases) {
+            $arguments = [string[]]$case.Args
+            $plain = & ".\\aeon-mud.bat" @arguments 2>&1 | Out-String
+            $plainCode = $LASTEXITCODE
+            $gui = & ".\\aeon-mud-wezterm.bat" @arguments 2>&1 | Out-String
+            $guiCode = $LASTEXITCODE
+            Write-Host "Case: $($case.Args -join ' ')"
+            if ($plainCode -ne 0 -or $guiCode -ne 0) {
+              throw "Both launchers must return 0 for help: plain=$plainCode gui=$guiCode"
+            }
+            if (-not $gui.Contains($case.Usage) -or -not $plain.Contains($case.Usage)) {
+              throw "Expected targeted help $($case.Usage), got $gui"
+            }
+            if ($gui -match "Launching Aeon MUD in WezTerm|WezTerm was not found") {
+              throw "Help must never launch or resolve WezTerm"
             }
           }
       - name: Launcher reports executable failures

@@ -117,6 +117,20 @@ Run the dedicated Windows launcher with the same arguments as `aeon-mud.bat`:
 .\aeon-mud-wezterm.bat connect local-mud
 ```
 
+Help commands are handled by the same CLI as `aeon-mud.bat`, directly in
+the current terminal; they never open WezTerm:
+
+```powershell
+.\aeon-mud-wezterm.bat -h
+.\aeon-mud-wezterm.bat -h connect
+.\aeon-mud-wezterm.bat connect help
+.\aeon-mud-wezterm.bat help profile list
+```
+
+All of `help connect`, `connect help`, `-h connect`, and
+`connect --help` select the same command-specific help. The same applies to
+nested commands such as `profile list` and `secret set`.
+
 The launcher starts WezTerm in its own GUI window, running the existing Python
 client; the current directory is the repository directory. It checks for
 `python.exe` and `wezterm-gui.exe` on PATH, then common Windows install
