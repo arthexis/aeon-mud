@@ -95,9 +95,10 @@ jobs:
             @{ Args = @("secret", "set", "help"); Usage = "usage: aeon_mud_client.py secret set" }
           )
           foreach ($case in $cases) {
-            $plain = & ".\\aeon-mud.bat" @($case.Args) 2>&1 | Out-String
+            $arguments = [string[]]$case.Args
+            $plain = & ".\\aeon-mud.bat" @arguments 2>&1 | Out-String
             $plainCode = $LASTEXITCODE
-            $gui = & ".\\aeon-mud-wezterm.bat" @($case.Args) 2>&1 | Out-String
+            $gui = & ".\\aeon-mud-wezterm.bat" @arguments 2>&1 | Out-String
             $guiCode = $LASTEXITCODE
             Write-Host "Case: $($case.Args -join ' ')"
             if ($plainCode -ne 0 -or $guiCode -ne 0) {
