@@ -2406,9 +2406,10 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
         args=(stop, transcript, controller),
         daemon=True,
     )
-    reader = KeyReader()
+    reader: KeyReader | None = None
 
     try:
+        reader = KeyReader()
         ui.start()
         if initial_banner:
             transcript.write("recv", initial_banner)
@@ -2496,7 +2497,8 @@ def session_loop(profile: Profile, args: argparse.Namespace) -> None:
     finally:
         stop.set()
         controller.close()
-        reader.close()
+        if reader is not None:
+            reader.close()
         ui.close()
         if transcript.path:
             print(f"Log: {transcript.path}")
@@ -3065,7 +3067,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print("\\nDisconnected (Ctrl+C).")
+        return 130
     return 0
 
 
