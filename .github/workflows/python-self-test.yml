@@ -100,9 +100,12 @@ jobs:
             }
           }
           # Invalid options must still fail in the shell with argparse's code 2.
+          $ErrorActionPreference = "Continue"
           $bad = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\aeon-mud-wezterm.ps1" help unexpected 2>&1
-          if ($LASTEXITCODE -ne 2) {
-            throw "Invalid help target should report CLI exit code 2"
+          $badCode = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          if ($badCode -ne 2) {
+            throw "Invalid help target should report CLI exit code 2; got $badCode"
           }
       - name: Launcher reports executable failures
         shell: powershell
