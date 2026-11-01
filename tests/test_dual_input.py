@@ -2,13 +2,16 @@
 import unittest
 from unittest import mock
 
-import aeon_mud_client as mud
+
+from aeon_mud import input as keyboard, profiles, terminal
+from support import make_profile
+
 
 
 class DualInputTests(unittest.TestCase):
     def make_ui(self):
-        with mock.patch.object(mud.HistoryStore, "list_for", return_value=["north", "look"]):
-            return mud.MudUi(mud.Profile(name="dual", host="127.0.0.1", allow_plaintext=True))
+        with mock.patch.object(profiles.HistoryStore, "list_for", return_value=["north", "look"]):
+            return terminal.MudUi(profiles.Profile(name="dual", host="127.0.0.1", allow_plaintext=True))
 
     def test_tab_switch_preserves_cursor_and_both_drafts(self):
         ui = self.make_ui()
@@ -84,12 +87,12 @@ class DualInputTests(unittest.TestCase):
         self.assertEqual(rows, ["> *****", "> ******"])
 
     def test_control_keys_and_ansi_word_navigation(self):
-        self.assertEqual(mud.key_from_control_char("\t").name, "switch_input")
-        self.assertEqual(mud.key_from_control_char("\x0b").name, "delete_to_end")
-        self.assertEqual(mud.key_from_control_char("\x0e").name, "newline")
-        self.assertEqual(mud.key_from_control_char("\x1d").name, "quit")
-        self.assertEqual(mud.key_from_ansi_escape("\x1b[1;5D").name, "ctrl_left")
-        self.assertEqual(mud.key_from_ansi_escape("\x1b[1;5C").name, "ctrl_right")
+        self.assertEqual(keyboard.key_from_control_char("\t").name, "switch_input")
+        self.assertEqual(keyboard.key_from_control_char("\x0b").name, "delete_to_end")
+        self.assertEqual(keyboard.key_from_control_char("\x0e").name, "newline")
+        self.assertEqual(keyboard.key_from_control_char("\x1d").name, "quit")
+        self.assertEqual(keyboard.key_from_ansi_escape("\x1b[1;5D").name, "ctrl_left")
+        self.assertEqual(keyboard.key_from_ansi_escape("\x1b[1;5C").name, "ctrl_right")
 
     def test_layout_caps_each_composer_independently(self):
         ui = self.make_ui()
