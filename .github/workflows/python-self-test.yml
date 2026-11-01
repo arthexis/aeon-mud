@@ -44,8 +44,11 @@ jobs:
             throw "PowerShell launcher has syntax errors: $parseErrors"
           }
           $usage = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\aeon-mud-wezterm.ps1" 2>&1
-          if ($LASTEXITCODE -ne 2) {
-            throw "Expected usage exit code 2, got $LASTEXITCODE"
+          $launcherCode = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          Write-Host "Launcher exit: $launcherCode; output: $usage"
+          if ($launcherCode -ne 2) {
+            throw "Expected usage exit code 2, got $launcherCode"
           }
           if (-not ($usage -match "Usage:")) {
             throw "Expected usage instructions from launcher"
