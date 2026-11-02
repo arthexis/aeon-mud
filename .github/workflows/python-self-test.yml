@@ -1,17 +1,9 @@
 name: Python self-test
 
+# Required checks must always be reported, including docs-only PRs.
+# No push-to-main trigger: validation runs on PRs and manual dispatch only.
 on:
   pull_request:
-    paths:
-      - "aeon_mud_client.py"
-      - "aeon_mud/**"
-      - "pyproject.toml"
-      - "tests/**"
-      - "aeon-mud-wezterm.ps1"
-      - "aeon-mud-wezterm-session.ps1"
-      - "aeon-mud-wezterm.bat"
-      - "README.md"
-      - ".github/workflows/python-self-test.yml"
   workflow_dispatch:
 
 jobs:
@@ -157,3 +149,22 @@ jobs:
           if ($code -ne 0 -or $result -notmatch "exited with code 7") {
             throw "Session wrapper failed to preserve failure diagnostics"
           }
+
+  ci-required:
+    name: ci-required
+    runs-on: ubuntu-latest
+    needs: [self-test, wezterm-launcher]
+    if: ${{ always() }}
+    steps:
+      - name: Verify required jobs succeeded
+        env:
+          PYTHON_RESULT: ${{ needs.self-test.result }}
+          WINDOWS_RESULT: ${{ needs.wezterm-launcher.result }}
+        run: |
+          echo "Python: ${PYTHON_RESULT}"
+          echo "Windows: ${WINDOWS_RESULT}"
+          if [[ "${PYTHON_RESULT}" != "success" || "${WINDOWS_RESULT}" != "success" ]]; then
+            echo "::error::All required jobs must succeed; failure, cancellation and skipped results are blocking."
+            exit 1
+          fi
+          echo "All Aeon MUD checks passed."
