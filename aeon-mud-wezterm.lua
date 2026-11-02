@@ -9,9 +9,9 @@ config.keys = {
   { key = 'c', mods = 'CTRL', action = act.CopyTo 'Clipboard' },
   -- Send Ctrl+V to the Aeon input handler rather than injecting raw clipboard
   -- data: Aeon confirms multiline pastes before sending any game commands.
-  { key = 'v', mods = 'CTRL', action = act.SendString '\\x16' },
-  { key = 'v', mods = 'CTRL|SHIFT', action = act.SendString '\\x16' },
-  { key = 'Insert', mods = 'SHIFT', action = act.SendString '\\x16' },
+  { key = 'v', mods = 'CTRL', action = act.SendString '\x16' },
+  { key = 'v', mods = 'CTRL|SHIFT', action = act.SendString '\x16' },
+  { key = 'Insert', mods = 'SHIFT', action = act.SendString '\x16' },
 }
 
 return config
