@@ -113,6 +113,25 @@ entry points. Runtime regression tests continue to cover host consent,
 initial Telnet negotiation, first-command handling, auto-login, reconnects
 and the terminal's independent input buffers.
 
+## Aeon WezTerm clipboard shortcuts
+
+Windows started through `aeon-mud-wezterm.bat` use the repository-local
+`aeon-mud-wezterm.lua` shortcuts. They do **not** modify your global
+WezTerm settings.
+
+- **Ctrl+C** copies the terminal selection to the Windows clipboard rather
+  than interrupting the MUD session.
+- **Ctrl+V**, **Ctrl+Shift+V** and **Shift+Insert** request a paste through
+  Aeon's clipboard handler. A single line goes into the current draft; a
+  multiline paste asks for confirmation before sending commands.
+- **Ctrl+]** explicitly ends the client session, as before.
+
+WezTerm's native mouse selection can be copied with Ctrl+C; for copy mode
+use the regular WezTerm shortcuts. The launcher-specific config intentionally
+uses WezTerm defaults plus these shortcuts rather than the user's separate
+global WezTerm theme/key settings. The normal PowerShell/Windows Terminal and
+Linux launchers do not load this configuration.
+
 ## Optional WezTerm GUI launcher (Windows)
 
 [WezTerm](https://wezterm.org/) is an **optional** terminal GUI host. The client
