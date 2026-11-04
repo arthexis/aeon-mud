@@ -330,29 +330,3 @@ python -m py_compile .\aeon_mud_client.py
 python -m json.tool .\profiles.example.json
 git diff --check
 ```
-
-## Android APK
-
-The `android/` directory contains a limited Kotlin Android client that produces
-a debug APK:
-
-```powershell
-cd android
-.\gradlew.bat :app:assembleDebug
-```
-
-Output:
-
-```text
-android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-The Android client is intentionally foreground-only and battery-saver gated. It
-does not use background services, wake locks, reconnect loops, notifications, or
-battery-optimization exemptions. It refuses to connect unless Android reports
-system power-saver mode through `PowerManager.isPowerSaveMode`, which is the
-portable Android signal available when Samsung maximum power saving is active.
-
-This Windows laptop currently needs a local Android SDK and JDK 17 before it can
-run the APK build locally. The GitHub Actions workflow `Android APK` builds the
-same debug APK and uploads it as the `aeon-mud-debug-apk` artifact.
