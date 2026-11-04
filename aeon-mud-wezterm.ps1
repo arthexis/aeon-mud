@@ -88,6 +88,13 @@ if (-not (Test-Path -LiteralPath $sessionScript -PathType Leaf)) {
     exit 1
 }
 
+# Keep Aeon copy/paste shortcuts local to windows started by this launcher.
+$weztermConfig = Join-Path $PSScriptRoot "aeon-mud-wezterm.lua"
+if (-not (Test-Path -LiteralPath $weztermConfig -PathType Leaf)) {
+    Write-Host "Aeon MUD WezTerm key configuration not found: $weztermConfig" -ForegroundColor Red
+    exit 1
+}
+
 # Set paths in the child environment rather than relying on Windows -File
 # positional argument binding. The remaining arguments are all client options.
 $env:AEON_MUD_PYTHON_PATH = $python.Source
@@ -96,7 +103,7 @@ Write-Host "Launching Aeon MUD in WezTerm..."
 Write-Host "WezTerm: $wezterm"
 try {
     # -NoExit keeps the pane open even when Python exits before displaying its error.
-    & $wezterm start --cwd $PSScriptRoot -- powershell.exe -NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File $sessionScript @args
+    & $wezterm --config-file $weztermConfig start --cwd $PSScriptRoot -- powershell.exe -NoLogo -NoProfile -NoExit -ExecutionPolicy Bypass -File $sessionScript @args
     $launchCode = $LASTEXITCODE
 } catch {
     Write-Host "WezTerm launch failed: $_" -ForegroundColor Red
