@@ -1,0 +1,7 @@
+# name	action	expected_result	expected_old_closed	expected_current
+disconnect_stale	stale_disconnect	false	false	new
+disconnect_current	current_disconnect	true	true	none
+send_stale	stale_send	ConnectionChanged	false	new
+send_current	current_send	ok	false	new
+worker_superseded	login_worker_stale	no_send	true	new
+stop_before_retry	stop_before_retry	false	false	none
