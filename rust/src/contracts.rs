@@ -6,7 +6,10 @@
 fn rows(source: &str, columns: usize) -> Vec<Vec<&str>> {
     let mut names = std::collections::HashSet::new();
     let mut parsed = Vec::new();
-    for line in source.lines().filter(|line| !line.is_empty() && !line.starts_with('#')) {
+    for line in source
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
         let cols: Vec<_> = line.split('\t').collect();
         assert_eq!(cols.len(), columns, "invalid fixture columns: {line}");
         assert!(names.insert(cols[0]), "duplicate contract id: {}", cols[0]);
@@ -20,7 +23,10 @@ fn is_hex(value: &str) -> bool {
 }
 
 fn check_hex(value: &str) {
-    assert!(value == "-" || is_hex(value), "invalid hex fixture: {value}");
+    assert!(
+        value == "-" || is_hex(value),
+        "invalid hex fixture: {value}"
+    );
 }
 
 #[test]
