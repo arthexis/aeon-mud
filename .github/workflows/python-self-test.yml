@@ -117,7 +117,8 @@ jobs:
           $result = & $exe self-test
           if ($LASTEXITCODE -ne 0 -or $result -notmatch "self-test passed") { throw "Native self-test failed: $result" }
           $result = & $exe --help
-          if ($LASTEXITCODE -ne 0 -or $result -notmatch "Usage: aeon-mud") { throw "Native help failed: $result" }
+          $helpText = $result | Out-String
+          if ($LASTEXITCODE -ne 0 -or $helpText -notmatch "Usage: aeon-mud") { throw "Native help failed: $helpText" }
       - name: Publish native Windows EXE
         uses: actions/upload-artifact@v4
         with:
