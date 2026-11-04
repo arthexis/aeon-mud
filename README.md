@@ -80,18 +80,19 @@ credentials and the MUD protocol remain unchanged.
 
 ## GitHub branch protection / ruleset
 
-GitHub Actions runs on **every pull request** (including documentation-only
-changes) and on manual `workflow_dispatch`. It does not run on pushes to
-`main`. Two diagnostic jobs run in parallel: `self-test` (Python, package,
-loopback integration) and `wezterm-launcher` (Windows). A final, always-run
-`ci-required` job succeeds only if both diagnostics succeed. Failed,
-cancelled or skipped dependencies are failures, not a green skipped check.
+The workflow is named **CI** and runs for every pull request (including
+documentation-only changes) and manual `workflow_dispatch`; it does not
+run on pushes to `main`.
 
-In the GitHub ruleset for `main`, require exactly one status check:
-**`ci-required`** from **GitHub Actions**. Do not require the internal
-`self-test` or `wezterm-launcher` jobs individually. Keep this job name
-stable, as renaming it requires updating the ruleset. Enable required checks
-only after the first PR has published `ci-required` to GitHub.
+Three diagnostic jobs run: `self-test` (Linux Python, loopback and wheel),
+`wezterm-launcher` (Windows scripts) and `native-launcher` (Windows EXE
+build, self-test and artifact). A final, always-run job named **`CI`**
+passes only if all three jobs succeeded. Failed, cancelled or skipped
+dependencies fail the gate.
+
+The `main` GitHub ruleset requires exactly one status check, **`CI`**
+(GitHub Actions). Do not require the diagnostic jobs individually. Keep the
+job name stable, since GitHub matches required check contexts by exact name.
 
 ## Tests
 
