@@ -25,3 +25,6 @@ android/build/
 android/app/build/
 android/local.properties
 *.apk
+
+# Native Rust build output
+rust/target/
