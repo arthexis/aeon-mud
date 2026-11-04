@@ -79,3 +79,36 @@ fn help_contract_is_shared_and_machine_readable() {
         assert!(!row[1].is_empty() && !row[2].is_empty());
     }
 }
+
+#[test]
+fn keyboard_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/keys.tsv"), 3);
+    assert!(cases.len() >= 10);
+    for row in cases {
+        assert_eq!(row[1].len(), 2);
+        assert!(is_hex(row[1]));
+        assert!(!row[2].is_empty());
+    }
+}
+
+#[test]
+fn outbound_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/outbound.tsv"), 4);
+    assert!(cases.len() >= 7);
+    for row in cases {
+        assert_eq!(row[1].chars().count(), 1);
+        assert!(row[2].parse::<usize>().is_ok());
+        assert!(row[3].split(',').all(|length| length.parse::<usize>().is_ok()));
+    }
+}
+
+#[test]
+fn identity_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/identity.tsv"), 5);
+    assert!(cases.len() >= 4);
+    for row in cases {
+        assert!(row[2].parse::<u16>().is_ok());
+        assert!(!row[3].is_empty());
+        assert!(row[4].starts_with("character:["));
+    }
+}
