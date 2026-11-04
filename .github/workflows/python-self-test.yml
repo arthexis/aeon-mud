@@ -103,6 +103,36 @@ jobs:
               throw "Help must never launch or resolve WezTerm"
             }
           }
+      - name: WezTerm applies Aeon-only clipboard shortcuts
+        shell: powershell
+        run: |
+          $config = Get-Content ".\\aeon-mud-wezterm.lua" -Raw
+          foreach ($required in @(
+            "mods = 'CTRL', action = act.CopyTo 'Clipboard'",
+            "mods = 'CTRL', action = act.SendString",
+            "mods = 'CTRL|SHIFT', action = act.SendString",
+            "mods = 'SHIFT', action = act.SendString"
+          )) {
+            if (-not $config.Contains($required)) {
+              throw "Aeon WezTerm config missing shortcut: $required"
+            }
+          }
+          # A fake wezterm executable records arguments without launching a GUI.
+          $probe = Join-Path $env:RUNNER_TEMP "wezterm-args.cmd"
+          Set-Content -LiteralPath $probe -Encoding ASCII -Value @(
+            "@echo off",
+            "echo WEZTERM_ARGS=%*"
+          )
+          $env:AEON_WEZTERM_PATH = $probe
+          $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\aeon-mud-wezterm.ps1" connect example 2>&1
+          $code = $LASTEXITCODE
+          $result = $output | Out-String
+          Write-Host $result
+          if ($code -ne 0 -or -not $result.Contains("--config-file") -or
+              -not $result.Contains("aeon-mud-wezterm.lua") -or
+              -not $result.Contains(" start --cwd")) {
+            throw "WezTerm launcher did not load the Aeon shortcut config"
+          }
       - name: Launcher reports executable failures
         shell: powershell
         run: |
