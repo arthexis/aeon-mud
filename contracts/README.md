@@ -10,6 +10,9 @@ for the incremental Rust port. They contain no credentials or external endpoints
 - `hosts.tsv`: host input and optional explicit port; compare normalized host/port
   or require a validation error.
 - `help.tsv`: tokenized CLI help argument forms and canonical normalized tokens.
+- `keys.tsv`: control-character key events.
+- `outbound.tsv`: 1024-character outbound chunk boundaries, including the `spoof ` prefix.
+- `identity.tsv`: synthetic host/port/character-derived DPAPI key names, not passwords.
 
 All TSVs have a comment header, unique case IDs, and fixed-width columns.
 A dash (`-`) represents no bytes or no optional port. Hex encoding avoids
@@ -27,7 +30,6 @@ against these rows before its corresponding feature can be marked complete.
 
 Update a fixture only when fixing an incorrect reference or explicitly
 approving a behavior change; add new rows for regressions. Do not capture
-live user files or credentials. Other pending phase-1 scenarios (reconnect,
-login timing, ANSI edge cases, outbound buffer boundaries, persistence round
-trips, clipboard state transitions) will be added to the same versioned
-format as their deterministic harnesses are available.
+live user files or credentials. Remaining phase-1 scenarios (reconnect, login timing, ANSI edge cases,
+persistence round trips, clipboard state transitions) will be added
+incrementally as deterministic harnesses become available.
