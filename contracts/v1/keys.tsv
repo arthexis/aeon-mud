@@ -1,0 +1,11 @@
+# v1	case	control_char_hex	event_name
+interrupt	03	quit
+explicit_quit	1d	quit
+paste	16	paste
+switch_composer	09	switch_input
+insert_newline	0e	newline
+delete_to_end	0b	delete_to_end
+clear_line	15	clear_line
+delete_word	17	delete_word
+home	01	home
+end	05	end

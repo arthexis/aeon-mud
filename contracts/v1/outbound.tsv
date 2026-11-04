@@ -1,0 +1,8 @@
+# v1	case	repeated_character	input_length	expected_buffer_lengths
+empty	x	0	0
+short	x	12	12
+boundary_minus_one	x	1023	1023
+exact_limit	x	1024	1024
+over_limit	x	1025	1024,7
+second_exact	x	2042	1024,1024
+third_needed	x	2043	1024,1024,7

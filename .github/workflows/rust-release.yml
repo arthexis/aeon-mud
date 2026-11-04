@@ -1,0 +1,74 @@
+name: Rust Preview Release
+
+on:
+  push:
+    tags:
+      - 'rust-preview-v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Preview tag to create (rust-preview-v...)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release-windows:
+    name: Windows x64 preview release
+    runs-on: windows-latest
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+      - name: Format and lint
+        working-directory: rust
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+      - name: Test native Rust client
+        working-directory: rust
+        run: cargo test --all-targets
+      - name: Build Windows x64 native console executable
+        working-directory: rust
+        run: cargo build --release --target x86_64-pc-windows-msvc
+      - name: Verify native binary and prepare checksums
+        shell: pwsh
+        run: |
+          $exe = "rust/target/x86_64-pc-windows-msvc/release/aeon-mud.exe"
+          if (!(Test-Path $exe)) { throw "Native EXE was not built" }
+          & $exe self-test
+          if ($LASTEXITCODE -ne 0) { throw "Native self-test failed" }
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item $exe release/aeon-mud.exe
+          $digest = (Get-FileHash -LiteralPath release/aeon-mud.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  aeon-mud.exe" | Set-Content -Encoding ascii release/SHA256SUMS.txt
+      - name: Publish executable directly to GitHub Releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          $notes = @"
+          Rust/Windows Terminal preview — not yet a functional MUD client.
+
+          This native Windows x64 console executable can show help/version/self-test.
+          Telnet connections, profiles, and interactive gameplay are NOT implemented yet.
+          Do not uninstall the existing Python client.
+
+          Download aeon-mud.exe directly from this release.
+          SHA256SUMS.txt contains its SHA-256 digest.
+          "@
+          if ($env:TAG -notmatch '^rust-preview-v[0-9][A-Za-z0-9._-]*' -or $Matches[0] -ne $env:TAG) { throw 'Expected rust-preview-v... tag' }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            gh release create "$env:TAG" release/aeon-mud.exe release/SHA256SUMS.txt --target "$env:GITHUB_SHA" --prerelease --title "Aeon MUD Rust Preview $env:TAG" --notes "$notes"
+          } else {
+            gh release create "$env:TAG" release/aeon-mud.exe release/SHA256SUMS.txt --verify-tag --prerelease --title "Aeon MUD Rust Preview $env:TAG" --notes "$notes"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release publication failed" }

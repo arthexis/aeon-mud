@@ -8,7 +8,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from aeon_mud import cli, config, telnet, terminal_text
+from aeon_mud import cli, config, telnet, terminal_text, input as keyboard, security, profiles
 
 
 ROOT = Path(__file__).resolve().parents[1] / "contracts" / "v1"
@@ -89,6 +89,43 @@ class CompatibilityContractTests(unittest.TestCase):
                 self.assertEqual(
                     cli.normalize_help_argv(raw_argv.split(",")),
                     expected_argv.split(","),
+                )
+
+    def test_keyboard_control_contracts(self):
+        cases = list(rows("keys.tsv", 3))
+        self.assertGreaterEqual(len(cases), 10)
+        for name, hex_char, event_name in cases:
+            with self.subTest(name=name):
+                key = keyboard.key_from_control_char(chr(int(hex_char, 16)))
+                self.assertEqual(key.name, event_name)
+
+    def test_outbound_buffer_boundaries(self):
+        cases = list(rows("outbound.tsv", 4))
+        self.assertGreaterEqual(len(cases), 7)
+        for name, char, count, lengths in cases:
+            with self.subTest(name=name):
+                self.assertEqual(len(char), 1)
+                source = char * int(count)
+                chunks = terminal_text.split_outbound_buffers(source)
+                self.assertEqual(
+                    [len(chunk) for chunk in chunks],
+                    [int(n) for n in lengths.split(",")],
+                )
+                self.assertTrue(all(len(chunk) <= 1024 for chunk in chunks))
+                self.assertTrue(all(chunk.startswith("spoof ") for chunk in chunks[1:]))
+                self.assertEqual(
+                    chunks[0] + "".join(chunk[len("spoof "):] for chunk in chunks[1:]),
+                    source,
+                )
+
+    def test_character_identity_keys_without_credentials(self):
+        cases = list(rows("identity.tsv", 5))
+        self.assertGreaterEqual(len(cases), 4)
+        for name, host, port, character, key in cases:
+            with self.subTest(name=name):
+                profile = profiles.Profile(name="synthetic", host=host, port=int(port))
+                self.assertEqual(
+                    security.character_secret_key(profile, character), key
                 )
 
 
