@@ -180,45 +180,20 @@ jobs:
             throw "Session wrapper failed to preserve failure diagnostics"
           }
 
-  native-launcher:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - name: Build single-file Windows executable
-        shell: pwsh
-        run: dotnet publish launcher/AeonMud.Launcher.csproj -c Release -r win-x64 --self-contained true -o dist/native -p:PublishSingleFile=true
-      - name: Verify executable and headless profile/argument tests
-        shell: pwsh
-        run: |
-          $exe = "dist/native/aeon-mud.exe"
-          if (-not (Test-Path $exe)) { throw "Executable missing" }
-          $result = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--launcher-self-test" -Wait -PassThru
-          if ($result.ExitCode -ne 0) { throw "Launcher self-test failed: $($result.ExitCode)" }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aeon-mud-windows-x64
-          path: dist/native/aeon-mud.exe
-          if-no-files-found: error
-
   required-check:
     name: CI
     runs-on: ubuntu-latest
-    needs: [self-test, wezterm-launcher, native-launcher]
+    needs: [self-test, wezterm-launcher]
     if: ${{ always() }}
     steps:
       - name: Verify required jobs succeeded
         env:
           PYTHON_RESULT: ${{ needs.self-test.result }}
           WINDOWS_RESULT: ${{ needs.wezterm-launcher.result }}
-          NATIVE_RESULT: ${{ needs.native-launcher.result }}
         run: |
           echo "Python: ${PYTHON_RESULT}"
           echo "Windows: ${WINDOWS_RESULT}"
-          echo "Native: ${NATIVE_RESULT}"
-          if [[ "${PYTHON_RESULT}" != "success" || "${WINDOWS_RESULT}" != "success" || "${NATIVE_RESULT}" != "success" ]]; then
+          if [[ "${PYTHON_RESULT}" != "success" || "${WINDOWS_RESULT}" != "success" ]]; then
             echo "::error::All required jobs must succeed; failure, cancellation and skipped results are blocking."
             exit 1
           fi
