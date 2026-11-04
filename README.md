@@ -80,18 +80,19 @@ credentials and the MUD protocol remain unchanged.
 
 ## GitHub branch protection / ruleset
 
-GitHub Actions runs on **every pull request** (including documentation-only
-changes) and on manual `workflow_dispatch`. It does not run on pushes to
-`main`. Two diagnostic jobs run in parallel: `self-test` (Python, package,
-loopback integration) and `wezterm-launcher` (Windows). A final, always-run
-`ci-required` job succeeds only if both diagnostics succeed. Failed,
-cancelled or skipped dependencies are failures, not a green skipped check.
+The workflow is named **CI** and runs for every pull request (including
+documentation-only changes) and manual `workflow_dispatch`; it does not
+run on pushes to `main`.
 
-In the GitHub ruleset for `main`, require exactly one status check:
-**`ci-required`** from **GitHub Actions**. Do not require the internal
-`self-test` or `wezterm-launcher` jobs individually. Keep this job name
-stable, as renaming it requires updating the ruleset. Enable required checks
-only after the first PR has published `ci-required` to GitHub.
+Three diagnostic jobs run: `self-test` (Linux Python, loopback and wheel),
+`wezterm-launcher` (Windows scripts) and `native-launcher` (Windows EXE
+build, self-test and artifact). A final, always-run job named **`CI`**
+passes only if all three jobs succeeded. Failed, cancelled or skipped
+dependencies fail the gate.
+
+The `main` GitHub ruleset requires exactly one status check, **`CI`**
+(GitHub Actions). Do not require the diagnostic jobs individually. Keep the
+job name stable, since GitHub matches required check contexts by exact name.
 
 ## Tests
 
@@ -146,6 +147,42 @@ use the regular WezTerm shortcuts. The launcher-specific config intentionally
 uses WezTerm defaults plus these shortcuts rather than the user's separate
 global WezTerm theme/key settings. The normal PowerShell/Windows Terminal and
 Linux launchers do not load this configuration.
+
+## Windows clickable launcher (issue #23)
+
+The PR CI publishes a native Windows x64 **aeon-mud.exe** artifact. Download
+the artifact from the PR's Actions run and extract the executable into the
+**repository root**, alongside the Python client and existing scripts.
+Build locally with the .NET 8 SDK:
+
+```powershell
+dotnet publish launcher/AeonMud.Launcher.csproj -c Release -r win-x64 --self-contained true -o dist/native -p:PublishSingleFile=true
+```
+
+Double-click aeon-mud.exe in File Explorer to select a saved profile and
+optional character. The picker reads %APPDATA%\AeonMud\client\profiles.json
+without rewriting existing profiles or DPAPI secrets. New connection lets
+you enter a host, port and explicit plaintext Telnet acknowledgement.
+The existing Python client retains public-host and Telnet safety checks.
+
+This executable is a native launcher, not a rewritten Telnet engine. Python
+3 and WezTerm are still required. Launch errors appear in a dialog; the
+existing WezTerm session stays open for client errors. Existing BAT and
+PowerShell launchers remain usable.
+
+CLI arguments are also accepted. connect starts the existing WezTerm
+session; help and other commands show Python CLI output without WezTerm.
+For interactive secret/profile management and shell-native output, use
+aeon-mud.bat.
+
+```powershell
+.\aeon-mud.exe connect tapestries --login Merlin
+.\aeon-mud.exe help profile list
+```
+
+A headless CI self-test covers profile parsing and argument boundaries.
+Actual Windows 11 double-click, DPAPI and WezTerm startup remain field
+acceptance checks before release.
 
 ## Optional WezTerm GUI launcher (Windows)
 
