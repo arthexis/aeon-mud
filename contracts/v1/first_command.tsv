@@ -1,0 +1,4 @@
+# name	ready_before_send	secret	expected_wait_s	expected_wire_hex	expected_remember	expected_redacted
+ready_plain	true	false	2.0	6c6f6f6b0d0a	true	false
+silent_fallback	false	false	2.0	6c6f6f6b0d0a	true	false
+ready_secret	true	true	2.0	73796e7468657469630d0a	false	true
