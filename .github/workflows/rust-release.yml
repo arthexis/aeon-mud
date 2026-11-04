@@ -65,8 +65,7 @@ jobs:
           Download aeon-mud.exe directly from this release.
           SHA256SUMS.txt contains its SHA-256 digest.
           "@
-          if ($env:TAG -notmatch '^rust-preview-v[0-9][A-Za-z0-9._-]*
-) { throw "Expected rust-preview-v... tag" }
+          if ($env:TAG -notmatch '^rust-preview-v[0-9][A-Za-z0-9._-]*' -or $Matches[0] -ne $env:TAG) { throw 'Expected rust-preview-v... tag' }
           if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
             gh release create "$env:TAG" release/aeon-mud.exe release/SHA256SUMS.txt --target "$env:GITHUB_SHA" --prerelease --title "Aeon MUD Rust Preview $env:TAG" --notes "$notes"
           } else {
