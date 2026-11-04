@@ -1,0 +1,5 @@
+# v1	case	host	port	character	expected_secret_key
+casefold_host	TAPESTRIES.FUR.COM.	2069	Merlin	character:["tapestries.fur.com",2069,"Merlin"]
+port_isolation	tapestries.fur.com	2070	Merlin	character:["tapestries.fur.com",2070,"Merlin"]
+character_isolation	tapestries.fur.com	2069	Gandalf	character:["tapestries.fur.com",2069,"Gandalf"]
+ipv4	127.0.0.1	4000	Hero	character:["127.0.0.1",4000,"Hero"]
