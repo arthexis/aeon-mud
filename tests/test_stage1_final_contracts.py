@@ -53,6 +53,7 @@ class FinalStageOneContracts(unittest.TestCase):
                 new = mock.Mock(name="new")
                 if action != "stop_before_retry":
                     controller.install_connection(new, telnet.TelnetCodec())
+                    old.close.reset_mock()
                 try:
                     if action == "stale_disconnect":
                         result = str(controller.mark_disconnected(old, "stale"))
@@ -84,7 +85,7 @@ class FinalStageOneContracts(unittest.TestCase):
                         self.assertEqual(result.lower(), expected)
                     else:
                         self.assertEqual(result, expected)
-                    self.assertEqual(old.close.called, old_closed == "true" or action not in {"stale_disconnect", "stale_send", "current_send", "login_worker_stale"})
+                    self.assertEqual(old.close.called, old_closed == "true")
                     observed = controller.current_connection()
                     self.assertEqual(
                         "none" if observed is None else "new" if observed[0] is new else "old",
