@@ -78,6 +78,21 @@ The interactive client is now divided into four additional package modules:
 compatibility re-exports. Launcher arguments, profile locations, encrypted
 credentials and the MUD protocol remain unchanged.
 
+## GitHub branch protection / ruleset
+
+GitHub Actions runs on **every pull request** (including documentation-only
+changes) and on manual `workflow_dispatch`. It does not run on pushes to
+`main`. Two diagnostic jobs run in parallel: `self-test` (Python, package,
+loopback integration) and `wezterm-launcher` (Windows). A final, always-run
+`ci-required` job succeeds only if both diagnostics succeed. Failed,
+cancelled or skipped dependencies are failures, not a green skipped check.
+
+In the GitHub ruleset for `main`, require exactly one status check:
+**`ci-required`** from **GitHub Actions**. Do not require the internal
+`self-test` or `wezterm-launcher` jobs individually. Keep this job name
+stable, as renaming it requires updating the ruleset. Enable required checks
+only after the first PR has published `ci-required` to GitHub.
+
 ## Tests
 
 The project uses standard-library `unittest` without additional test
