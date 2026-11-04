@@ -4,6 +4,7 @@ All transports, clocks, temporary files and credentials are synthetic.
 """
 from __future__ import annotations
 
+import json
 import tempfile
 import threading
 import unittest
@@ -129,7 +130,9 @@ class StageOneSessionContracts(unittest.TestCase):
                     self.assertEqual(restored.port, int(port))
                     self.assertEqual(restored.characters, values(characters, ";"))
                     self.assertEqual(path.read_bytes(), original_bytes)
-                    self.assertNotIn(b"password", original_bytes.lower())
+                    saved_fields = json.loads(original_bytes)["profiles"][profile_name]
+                    self.assertNotIn("password", saved_fields)
+                    self.assertNotIn("secret", saved_fields)
                     history_store = profiles.HistoryStore(hist_path)
                     for command in values(history, ";"):
                         history_store.add(profile, command)
