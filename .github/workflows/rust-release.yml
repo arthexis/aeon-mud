@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'rust-preview-v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Preview tag to create (rust-preview-v...)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -12,6 +18,7 @@ jobs:
   release-windows:
     name: Windows x64 preview release
     runs-on: windows-latest
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     permissions:
       contents: write
     steps:
@@ -30,7 +37,7 @@ jobs:
         run: cargo test --all-targets
       - name: Build Windows x64 native console executable
         working-directory: rust
-        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+        run: cargo build --release --target x86_64-pc-windows-msvc
       - name: Verify native binary and prepare checksums
         shell: pwsh
         run: |
@@ -46,7 +53,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           $notes = @"
           Rust/Windows Terminal preview — not yet a functional MUD client.
@@ -58,4 +65,11 @@ jobs:
           Download aeon-mud.exe directly from this release.
           SHA256SUMS.txt contains its SHA-256 digest.
           "@
-          gh release create "$env:TAG" release/aeon-mud.exe release/SHA256SUMS.txt --verify-tag --prerelease --title "Aeon MUD Rust Preview $env:TAG" --notes "$notes"
+          if ($env:TAG -notmatch '^rust-preview-v[0-9][A-Za-z0-9._-]*
+) { throw "Expected rust-preview-v... tag" }
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            gh release create "$env:TAG" release/aeon-mud.exe release/SHA256SUMS.txt --target "$env:GITHUB_SHA" --prerelease --title "Aeon MUD Rust Preview $env:TAG" --notes "$notes"
+          } else {
+            gh release create "$env:TAG" release/aeon-mud.exe release/SHA256SUMS.txt --verify-tag --prerelease --title "Aeon MUD Rust Preview $env:TAG" --notes "$notes"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release publication failed" }
