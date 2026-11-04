@@ -20,11 +20,5 @@ known_hosts.json
 history.json
 secrets.json
 
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
-*.apk
-
 # Native Rust build output
 rust/target/
