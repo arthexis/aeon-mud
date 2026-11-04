@@ -13,6 +13,9 @@ for the incremental Rust port. They contain no credentials or external endpoints
 - `keys.tsv`: control-character key events.
 - `outbound.tsv`: 1024-character outbound chunk boundaries, including the `spoof ` prefix.
 - `identity.tsv`: synthetic host/port/character-derived DPAPI key names, not passwords.
+- `reconnect.tsv`: retry delays, backoff caps, disabled reconnect and connection attempt counts; fake transport and recorded sleeps.
+- `login.tsv`: prompt-driven username/password ordering and character-login override, using synthetic strings only.
+- `persistence.tsv`: profile/character and history round trips in isolated temporary directories, including consecutive duplicate suppression and read-only loads.
 
 All TSVs have a comment header, unique case IDs, and fixed-width columns.
 A dash (`-`) represents no bytes or no optional port. Hex encoding avoids
@@ -30,6 +33,4 @@ against these rows before its corresponding feature can be marked complete.
 
 Update a fixture only when fixing an incorrect reference or explicitly
 approving a behavior change; add new rows for regressions. Do not capture
-live user files or credentials. Remaining phase-1 scenarios (reconnect, login timing, ANSI edge cases,
-persistence round trips, clipboard state transitions) will be added
-incrementally as deterministic harnesses become available.
+live user files or credentials. Remaining phase-1 scenarios include reconnect race conditions, prompt timing across a real loopback transport, corrupted/legacy JSON files, clipboard state transitions and additional ANSI edge cases. Fixtures validate Python behavior; Rust still only ingests these contract files until native implementations are added.

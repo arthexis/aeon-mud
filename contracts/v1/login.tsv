@@ -1,0 +1,7 @@
+# name	auto_login	character_login	server_output_chunks_separated_by_semicolon	expected_sent_commands
+username_then_password	true	false	Username:;Password:	alice:plain,synthetic-password:secret
+split_username_prompt	true	false	User;name:	alice:plain
+repeated_username	true	false	Username:;Username:	alice:plain
+password_only	true	false	Password:	synthetic-password:secret
+auto_disabled	false	false	Username:;Password:	-
+character_login_skips_prompt	true	true	Username:;Password:	-

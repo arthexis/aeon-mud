@@ -1,0 +1,6 @@
+# name	profile_name	host	port	characters_semicolon_or_dash	history_semicolon_or_dash	expected_history_semicolon_or_dash
+basic	local	127.0.0.1	4000	Hero	look;look;north	look;north
+multiple_characters	multi account	mud.example	2069	Merlin;Gandalf	-	-
+nonconsecutive_history	sample	mud.example	4000	-	look;north;look	look;north;look
+trailing_newline	newline	localhost	5000	Hero	look;look;north	look;north
+empty	empty	localhost	4000	-	-	-
