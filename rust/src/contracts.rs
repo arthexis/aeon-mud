@@ -156,3 +156,53 @@ fn persistence_contract_is_shared_and_machine_readable() {
         assert!(!row[6].is_empty());
     }
 }
+
+#[test]
+fn connection_race_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/connection_races.tsv"), 5);
+    assert!(cases.len() >= 6);
+    for row in cases {
+        assert!(!row[1].is_empty() && !row[2].is_empty());
+        assert!(matches!(row[3], "true" | "false"));
+        assert!(matches!(row[4], "new" | "old" | "none"));
+    }
+}
+
+#[test]
+fn first_command_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/first_command.tsv"), 7);
+    assert!(cases.len() >= 3);
+    for row in cases {
+        assert!(matches!(row[1], "true" | "false"));
+        assert!(matches!(row[2], "true" | "false"));
+        assert!(row[3].parse::<f64>().is_ok());
+        check_hex(row[4]);
+        assert!(matches!(row[5], "true" | "false"));
+        assert!(matches!(row[6], "true" | "false"));
+    }
+}
+
+#[test]
+fn storage_error_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/storage_errors.tsv"), 4);
+    assert!(cases.len() >= 7);
+    for row in cases {
+        assert!(!row[1].is_empty() && !row[2].is_empty());
+        assert!(matches!(
+            row[3],
+            "ok" | "JSONDecodeError" | "ValueError" | "SystemExit"
+        ));
+    }
+}
+
+#[test]
+fn guarded_clipboard_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/clipboard.tsv"), 8);
+    assert!(cases.len() >= 5);
+    for row in cases {
+        assert!(matches!(row[1], "NONE" | "SINGLE" | "CRLF"));
+        assert!(matches!(row[2], "-" | "yes" | "no"));
+        assert!(row[3] == "-" || row[3].parse::<usize>().is_ok());
+        assert!(!row[7].is_empty());
+    }
+}

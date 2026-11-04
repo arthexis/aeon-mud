@@ -1,0 +1,8 @@
+# name	kind	input_token	expected
+invalid_json	load_json	bad_json	JSONDecodeError
+not_object	load_json	json_array	ValueError
+unknown_profile	profile_get	empty_profiles	SystemExit
+bad_profile_port	profile_get	bad_port	SystemExit
+session_unsupported_version	session_load	wrong_version	ValueError
+session_foreign_format	session_load	wrong_format	ValueError
+legacy_session_no_version	session_load	legacy	ok

@@ -16,6 +16,10 @@ for the incremental Rust port. They contain no credentials or external endpoints
 - `reconnect.tsv`: retry delays, backoff caps, disabled reconnect and connection attempt counts; fake transport and recorded sleeps.
 - `login.tsv`: prompt-driven username/password ordering and character-login override, using synthetic strings only.
 - `persistence.tsv`: profile/character and history round trips in isolated temporary directories, including consecutive duplicate suppression and read-only loads.
+- `connection_races.tsv`: stale transport disconnect/send safety, superseded login workers, stop before reconnect attempts.
+- `first_command.tsv`: first-output readiness, bounded silent-server fallback and secret redaction.
+- `storage_errors.tsv`: malformed/legacy JSON and fail-closed validation without read-side rewrites.
+- `clipboard.tsv`: missing, single-line, rejected/approved multiline clipboard and failed-send retention.
 
 All TSVs have a comment header, unique case IDs, and fixed-width columns.
 A dash (`-`) represents no bytes or no optional port. Hex encoding avoids
@@ -31,6 +35,6 @@ entrypoint for future Rust implementation tests.
 Ingesting a fixture is not parity. Each future module must assert its output
 against these rows before its corresponding feature can be marked complete.
 
-Update a fixture only when fixing an incorrect reference or explicitly
-approving a behavior change; add new rows for regressions. Do not capture
-live user files or credentials. Remaining phase-1 scenarios include reconnect race conditions, prompt timing across a real loopback transport, corrupted/legacy JSON files, clipboard state transitions and additional ANSI edge cases. Fixtures validate Python behavior; Rust still only ingests these contract files until native implementations are added.
+See [PARITY.md](PARITY.md) for the audited source-to-test inventory and explicit statuses. Stage 1 currently has **85 reference cases across 14 fixture families**; these are Python-verified and Rust-ingested, not native Rust behavioral parity.
+
+Update a fixture only when fixing an incorrect reference or explicitly approving a behavior change; add new rows for regressions. Do not capture live user files or credentials. Interactive Windows Terminal acceptance and native Rust behavior testing belong to later phases.
