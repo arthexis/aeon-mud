@@ -19,7 +19,7 @@ fn rows(source: &str, columns: usize) -> Vec<Vec<&str>> {
 }
 
 fn is_hex(value: &str) -> bool {
-    value.len() % 2 == 0 && value.bytes().all(|b| b.is_ascii_hexdigit())
+    value.len().is_multiple_of(2) && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn check_hex(value: &str) {
