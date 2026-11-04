@@ -114,3 +114,45 @@ fn identity_contract_is_shared_and_machine_readable() {
         assert!(row[4].starts_with("character:["));
     }
 }
+
+#[test]
+fn reconnect_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/reconnect.tsv"), 7);
+    assert!(cases.len() >= 6);
+    for row in cases {
+        assert!(matches!(row[1], "true" | "false"));
+        assert!(row[2].parse::<f64>().is_ok());
+        assert!(row[3].parse::<f64>().is_ok());
+        assert!(row[4].parse::<usize>().is_ok());
+        if row[5] != "-" {
+            assert!(row[5].split(',').all(|v| v.parse::<f64>().is_ok()));
+        }
+        assert!(row[6].parse::<usize>().is_ok());
+    }
+}
+
+#[test]
+fn login_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/login.tsv"), 5);
+    assert!(cases.len() >= 6);
+    for row in cases {
+        assert!(matches!(row[1], "true" | "false"));
+        assert!(matches!(row[2], "true" | "false"));
+        assert!(!row[3].is_empty());
+        assert!(!row[4].is_empty());
+    }
+}
+
+#[test]
+fn persistence_contract_is_shared_and_machine_readable() {
+    let cases = rows(include_str!("../../contracts/v1/persistence.tsv"), 7);
+    assert!(cases.len() >= 5);
+    for row in cases {
+        assert!(!row[1].is_empty());
+        assert!(!row[2].is_empty());
+        assert!(row[3].parse::<u16>().is_ok());
+        assert!(!row[4].is_empty());
+        assert!(!row[5].is_empty());
+        assert!(!row[6].is_empty());
+    }
+}
