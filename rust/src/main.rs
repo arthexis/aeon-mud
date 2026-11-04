@@ -50,7 +50,10 @@ fn execute(cmd: Command, interactive: bool, out: &mut impl Write, err: &mut impl
     match cmd {
         Command::Welcome => {
             let _ = writeln!(out, "Aeon MUD — Rust console prototype v{VERSION}");
-            let _ = writeln!(out, "Native console process; no Python or external terminal launcher.");
+            let _ = writeln!(
+                out,
+                "Native console process; no Python or external terminal launcher."
+            );
             let _ = writeln!(out, "\n{}", usage());
             if interactive {
                 let _ = write!(out, "\nPress Enter to close this prototype...");
@@ -122,7 +125,9 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
         assert_eq!(execute(Command::Welcome, false, &mut out, &mut err), 0);
-        assert!(String::from_utf8(out).unwrap().contains("Rust console prototype"));
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("Rust console prototype"));
         assert!(err.is_empty());
     }
 
@@ -135,7 +140,12 @@ mod tests {
         let mut out = Vec::new();
         let mut err = Vec::new();
         assert_eq!(
-            execute(Command::NotImplemented("connect".into()), false, &mut out, &mut err),
+            execute(
+                Command::NotImplemented("connect".into()),
+                false,
+                &mut out,
+                &mut err
+            ),
             2
         );
         assert!(out.is_empty());
@@ -146,7 +156,10 @@ mod tests {
     fn invalid_command_has_nonzero_exit() {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        assert_eq!(execute(parse(&args(&["unknown"])), false, &mut out, &mut err), 2);
+        assert_eq!(
+            execute(parse(&args(&["unknown"])), false, &mut out, &mut err),
+            2
+        );
         assert!(out.is_empty());
     }
 }
