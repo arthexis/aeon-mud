@@ -61,6 +61,24 @@ cargo build --release --target x86_64-pc-windows-msvc
 Rust is needed to build, not to run, the EXE. Python remains the reference
 implementation while Telnet, profile, credentials and TUI behavior are ported.
 
+## Rust preview GitHub Releases
+
+The native Windows x64 console EXE can be downloaded directly from
+[GitHub Releases](https://github.com/arthexis/aeon-mud/releases) instead of
+extracting a CI artifact. Preview releases include **aeon-mud.exe** and
+**SHA256SUMS.txt**, and are labeled *pre-release* because Rust does not yet
+support gameplay. The Python client remains the working reference.
+
+To publish a new preview: open **Actions → Rust Preview Release → Run workflow**,
+choose `main`, and enter a new tag such as `rust-preview-v0.1.0`. The workflow
+formats, lints, tests and builds the Windows MSVC executable, verifies its
+self-test, and creates a prerelease with the EXE and SHA-256 checksum attached.
+Pushing an existing `rust-preview-v*` tag also triggers publishing.
+Use a **new** tag for each preview; existing releases are not overwritten.
+
+No Rust toolchain is needed to run the downloadable EXE. The EXE remains
+a console bootstrap, **not yet a functional MUD client**.
+
 ## Python package (increment 1)
 
 The repository now includes an `aeon_mud` package with a stable module
