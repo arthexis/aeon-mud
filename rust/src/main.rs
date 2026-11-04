@@ -3,6 +3,9 @@
 //! This is intentionally a real console subsystem executable, not a wrapper
 //! around Python, PowerShell, Windows Terminal or the previous GUI project.
 //! Telnet and persisted-profile behavior will be ported in subsequent steps.
+#[cfg(test)]
+mod contracts;
+
 use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
