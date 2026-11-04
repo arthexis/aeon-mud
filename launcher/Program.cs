@@ -43,10 +43,11 @@ internal static class Launcher
         return result.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
-    internal static ProcessStartInfo BuildProcess(string[] args)
+    internal static ProcessStartInfo BuildProcess(string[] args, string? root = null)
     {
-        var script = Path.Combine(Root, "aeon-mud-wezterm.ps1");
-        var client = Path.Combine(Root, "aeon_mud_client.py");
+        root ??= Root;
+        var script = Path.Combine(root, "aeon-mud-wezterm.ps1");
+        var client = Path.Combine(root, "aeon_mud_client.py");
         if (!File.Exists(client) || !File.Exists(script))
             throw new FileNotFoundException(
                 "Place aeon-mud.exe alongside aeon_mud_client.py, aeon_mud/, and the existing Windows launchers. " +
@@ -57,7 +58,7 @@ internal static class Launcher
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            WorkingDirectory = Root
+            WorkingDirectory = root
         };
         foreach (var part in new[] { "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script })
             info.ArgumentList.Add(part);
@@ -96,14 +97,14 @@ internal static class Launcher
                     var p = ReadProfiles(temp).Single();
                     if (p.Name != "A profile" || p.Port != 2069 || p.Characters[0] != "A Wizard")
                         throw new Exception("Profile parsing mismatch");
-                    var test = BuildProcess(["connect", "A profile", "--login", "A Wizard"]);
+                    var test = BuildProcess(["connect", "A profile", "--login", "A Wizard"], Directory.GetCurrentDirectory());
                     if (!test.ArgumentList.Contains("A profile") || !test.ArgumentList.Contains("A Wizard"))
                         throw new Exception("Argument boundaries lost");
                 }
                 finally { File.Delete(temp); }
                 Environment.ExitCode = 0;
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 Environment.ExitCode = 1;
             }
