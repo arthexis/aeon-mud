@@ -195,8 +195,8 @@ jobs:
         run: |
           $exe = "dist/native/aeon-mud.exe"
           if (-not (Test-Path $exe)) { throw "Executable missing" }
-          & $exe --launcher-self-test
-          if ($LASTEXITCODE -ne 0) { throw "Launcher self-test failed: $LASTEXITCODE" }
+          $result = Start-Process -FilePath (Resolve-Path $exe) -ArgumentList "--launcher-self-test" -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Launcher self-test failed: $($result.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: aeon-mud-windows-x64
