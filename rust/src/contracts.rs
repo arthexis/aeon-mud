@@ -188,7 +188,10 @@ fn storage_error_contract_is_shared_and_machine_readable() {
     assert!(cases.len() >= 7);
     for row in cases {
         assert!(!row[1].is_empty() && !row[2].is_empty());
-        assert!(matches!(row[3], "ok" | "JSONDecodeError" | "ValueError" | "SystemExit"));
+        assert!(matches!(
+            row[3],
+            "ok" | "JSONDecodeError" | "ValueError" | "SystemExit"
+        ));
     }
 }
 
