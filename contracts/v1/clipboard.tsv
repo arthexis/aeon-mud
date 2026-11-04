@@ -1,0 +1,6 @@
+# name	clipboard_token	answer	fail_at	inserted	sent_commands_or_dash	retained_or_dash	status_token
+unavailable	NONE	-	-	-	-	-	Clipboard text unavailable
+single_line	SINGLE	-	-	look	-	-	-
+reject_multi	CRLF	no	-	-	-	-	Paste cancelled
+accept_multi	CRLF	yes	-	-	prelook;north	-	Pasted 2 lines
+send_fails	CRLF	yes	1	-	-	prelook;north	Paste stopped
