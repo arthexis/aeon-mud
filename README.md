@@ -23,6 +23,44 @@ The client also accepts `HOST:PORT` directly:
 .\aeon-mud.bat connect 127.0.0.1:4000 --allow-plaintext
 ```
 
+## Rust console prototype
+
+The first **native Windows console executable** lives in `rust/`. This is a
+dependency-free Rust program that runs without Python, .NET, PowerShell scripts,
+or a separate terminal emulator. It is **not yet a Telnet client**: use the
+Python client for real MUD connections until Rust feature parity is reached.
+
+GitHub Actions builds and tests the Windows MSVC executable and publishes
+the `aeon-mud-rust-windows-x64` artifact on PRs. Download it from the successful
+**CI** run, extract `aeon-mud.exe` anywhere, then use:
+
+```powershell
+.\aeon-mud.exe --help
+.\aeon-mud.exe --version
+.\aeon-mud.exe self-test
+.\aeon-mud.exe
+```
+
+Running it in Windows Terminal uses the existing tab. Double-clicking the EXE
+from Explorer opens the configured Windows default console application, which
+can be Windows Terminal. With no arguments the prototype displays its status
+and waits for Enter in an interactive console, rather than disappearing.
+Connection and profile commands deliberately report not implemented.
+
+With a local Rust compiler, contributors can run:
+
+```powershell
+cd rust
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo run -- --help
+cargo build --release --target x86_64-pc-windows-msvc
+```
+
+Rust is needed to build, not to run, the EXE. Python remains the reference
+implementation while Telnet, profile, credentials and TUI behavior are ported.
+
 ## Python package (increment 1)
 
 The repository now includes an `aeon_mud` package with a stable module
@@ -84,9 +122,10 @@ The workflow is named **CI** and runs for every pull request (including
 documentation-only changes) and manual `workflow_dispatch`; it does not
 run on pushes to `main`.
 
-Two diagnostic jobs run: `self-test` (Linux Python, loopback and wheel)
-and `windows-terminal` (plain Windows entry points). A final, always-run job named
-**`CI`** passes only if both jobs succeeded. Failed, cancelled or skipped
+Three diagnostic jobs run: `self-test` (Linux Python, loopback and wheel),
+`windows-terminal` (plain Windows entry points), and `rust-console` (native
+Windows Rust build, tests and executable artifact). A final, always-run job
+named **`CI`** passes only if all three jobs succeeded. Failed, cancelled or skipped
 dependencies fail the gate.
 
 The `main` GitHub ruleset requires exactly one status check, **`CI`**
