@@ -98,7 +98,9 @@ fn outbound_contract_is_shared_and_machine_readable() {
     for row in cases {
         assert_eq!(row[1].chars().count(), 1);
         assert!(row[2].parse::<usize>().is_ok());
-        assert!(row[3].split(',').all(|length| length.parse::<usize>().is_ok()));
+        assert!(row[3]
+            .split(',')
+            .all(|length| length.parse::<usize>().is_ok()));
     }
 }
 
