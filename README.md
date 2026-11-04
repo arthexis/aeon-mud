@@ -41,8 +41,8 @@ python -m pip install -e .
 aeon-mud self-test
 ```
 
-All original launchers, including `aeon-mud.bat`, the Unix shell script,
-`aeon-mud-wezterm.bat`, and `python aeon_mud_client.py`, remain supported.
+The Windows BAT/PowerShell launchers, Unix shell script, and
+`python aeon_mud_client.py` remain supported.
 For this first increment, the package CLI delegates to the existing client
 module; internal modules migrate incrementally in later PRs. No runtime
 dependencies were added, and profile/credential paths remain unchanged.
@@ -85,7 +85,7 @@ documentation-only changes) and manual `workflow_dispatch`; it does not
 run on pushes to `main`.
 
 Two diagnostic jobs run: `self-test` (Linux Python, loopback and wheel)
-and `wezterm-launcher` (Windows scripts). A final, always-run job named
+and `windows-terminal` (plain Windows entry points). A final, always-run job named
 **`CI`** passes only if both jobs succeeded. Failed, cancelled or skipped
 dependencies fail the gate.
 
@@ -117,7 +117,7 @@ and built-in self-test now live in `aeon_mud.cli`, alongside the existing
 `aeon_mud.session`, `terminal`, `input`, `commands`, and infrastructure modules.
 
 `aeon_mud_client.py` is a small compatibility entry point (under 60 lines),
-re-exporting the previous names. Existing Windows/Linux/WezTerm launchers,
+re-exporting the previous names. Existing Windows/Linux launchers,
 `python -m aeon_mud`, and the installed `aeon-mud` console script all use
 the same CLI implementation. No persistence format, credential, protocol or
 runtime dependency changes are part of this final extraction.
@@ -128,84 +128,27 @@ entry points. Runtime regression tests continue to cover host consent,
 initial Telnet negotiation, first-command handling, auto-login, reconnects
 and the terminal's independent input buffers.
 
-## Aeon WezTerm clipboard shortcuts
+## Windows Terminal experiment
 
-Windows started through `aeon-mud-wezterm.bat` use the repository-local
-`aeon-mud-wezterm.lua` shortcuts. They do **not** modify your global
-WezTerm settings.
-
-- **Ctrl+C** copies the terminal selection to the Windows clipboard rather
-  than interrupting the MUD session.
-- **Ctrl+V**, **Ctrl+Shift+V** and **Shift+Insert** request a paste through
-  Aeon's clipboard handler. A single line goes into the current draft; a
-  multiline paste asks for confirmation before sending commands.
-- **Ctrl+]** explicitly ends the client session, as before.
-
-WezTerm's native mouse selection can be copied with Ctrl+C; for copy mode
-use the regular WezTerm shortcuts. The launcher-specific config intentionally
-uses WezTerm defaults plus these shortcuts rather than the user's separate
-global WezTerm theme/key settings. The normal PowerShell/Windows Terminal and
-Linux launchers do not load this configuration.
-
-## Optional WezTerm GUI launcher (Windows)
-
-[WezTerm](https://wezterm.org/) is an **optional** terminal GUI host. The client
-still works unchanged in PowerShell/Windows Terminal and requires only Python.
-WezTerm is not bundled, downloaded automatically, or added as a Python package.
-
-Install WezTerm once using the [official Windows installation instructions](https://wezterm.org/install/windows.html)
-or Windows Package Manager:
+On Windows, use the existing Python client directly in **Windows Terminal**.
+There is no separate terminal emulator, GUI wrapper, or native launcher to
+install. Python must be available on PATH.
 
 ```powershell
-winget install --id wez.wezterm --exact
+.\aeon-mud.bat connect tapestries --login Merlin
+# Or use the PowerShell wrapper for quoting-sensitive arguments:
+.\aeon-mud.ps1 connect tapestries --login Merlin
+# CLI help stays in the current tab:
+.\aeon-mud.bat help profile list
 ```
 
-Run the dedicated Windows launcher with the same arguments as `aeon-mud.bat`:
-
-```powershell
-.\aeon-mud-wezterm.bat connect --host tapestries.fur.com --port 2069 --allow-plaintext
-# Or a previously saved profile:
-.\aeon-mud-wezterm.bat connect local-mud
-```
-
-Help commands are handled by the same CLI as `aeon-mud.bat`, directly in
-the current terminal; they never open WezTerm:
-
-```powershell
-.\aeon-mud-wezterm.bat -h
-.\aeon-mud-wezterm.bat -h connect
-.\aeon-mud-wezterm.bat connect help
-.\aeon-mud-wezterm.bat help profile list
-```
-
-All of `help connect`, `connect help`, `-h connect`, and
-`connect --help` select the same command-specific help. The same applies to
-nested commands such as `profile list` and `secret set`.
-
-The launcher starts WezTerm in its own GUI window, running the existing Python
-client; the current directory is the repository directory. It checks for
-`python.exe` and `wezterm-gui.exe` on PATH, then common Windows install
-locations. If WezTerm is installed as a portable ZIP, set
-`AEON_WEZTERM_PATH` to its full `wezterm-gui.exe` path. Neither GUI nor
-client is installed into the repository.
-
-If the launcher prints no error but no window appears, use a new PowerShell session
-after installing with Winget, then run `wezterm.exe start` to check the
-WezTerm installation directly. The launcher now prints the resolved executable
-path, its launch status and any CLI errors. You can override executable
-discovery with `$env:AEON_WEZTERM_PATH = "C:\\Program Files\\WezTerm\\wezterm.exe"`.
-WezTerm's CLI delegates to its GUI executable and surfaces useful errors.
-
-The GUI launcher starts Aeon MUD inside a PowerShell session that **stays
-open when the Python client exits**, so connection errors and tracebacks remain
-visible. After the client exits, read the diagnostic and close the WezTerm
-window/tab manually. This is intentional; it also permits troubleshooting
-when a session ends immediately after startup.
-
-For direct PowerShell use, invoke `aeon-mud-wezterm.ps1` with the same arguments.
-All network and plaintext-consent behavior remains in the Python client.
-WezTerm provides the window, tabs, fonts and terminal emulation; Aeon MUD still
-owns its keyboard shortcuts and in-terminal UI. Exit with `Ctrl+]` or `Ctrl+C`.
+You can open a new Windows Terminal tab with `wt.exe` if desired, but the
+client does not require `wt.exe` or manage Windows Terminal tabs. Keyboard,
+selection and clipboard shortcuts are governed by Windows Terminal settings;
+the client retains its guarded paste command and multiline confirmation
+when it receives the corresponding key event. Clipboard and Ctrl+C behavior
+must be verified interactively on Windows 11; the project does not override
+global terminal keybindings. Exit the client using `Ctrl+]`.
 
 ## Profiles
 
@@ -244,9 +187,9 @@ hostname after a **successful** connection. Subsequent launches can use the FQDN
 or its unique leftmost subdomain without specifying connection flags again:
 
 ```powershell
-.\aeon-mud-wezterm.bat connect --host tapestries.fur.com --port 2069 --allow-plaintext
-.\aeon-mud-wezterm.bat connect tapestries.fur.com
-.\aeon-mud-wezterm.bat connect tapestries
+.\aeon-mud.bat connect --host tapestries.fur.com --port 2069 --allow-plaintext
+.\aeon-mud.bat connect tapestries.fur.com
+.\aeon-mud.bat connect tapestries
 ```
 
 For a public address, the client still asks for explicit permission on the
@@ -262,14 +205,13 @@ directory. Use `aeon-mud.bat profile list` to inspect or
 `aeon-mud.bat profile remove NAME` to forget one. Telnet remains unencrypted;
 remembering permission is a convenience, not identity verification.
 
-### WezTerm tab titles and character login
+### Character login
 
-WezTerm's tab shows the connection hostname instead of `python.exe`. When
-a character is selected, the title becomes `<server> (<character>)`.
+Use the same profile and character arguments from a Windows Terminal tab.
 
 ```powershell
-.\aeon-mud-wezterm.bat connect tapestries --login Merlin
-.\aeon-mud-wezterm.bat connect tapestries --login Gandalf
+.\aeon-mud.bat connect tapestries --login Merlin
+.\aeon-mud.bat connect tapestries --login Gandalf
 ```
 
 The first use of `--login CHARACTER` prompts for the password without
