@@ -32,7 +32,7 @@ internal static class Launcher
             var p = entry.Value;
             string host = p.TryGetProperty("host", out var h) && h.ValueKind == JsonValueKind.String
                 ? h.GetString() ?? "" : "";
-            int port = p.TryGetProperty("port", out var n) && n.TryGetInt32(out int value) ? value : 23;
+            int port = p.TryGetProperty("port", out var n) && n.TryGetInt32(out int value) ? value : 4000;
             var characters = new List<string>();
             if (p.TryGetProperty("characters", out var list) && list.ValueKind == JsonValueKind.Array)
                 foreach (var ch in list.EnumerateArray())
@@ -105,7 +105,6 @@ internal static class Launcher
             }
             catch (Exception e)
             {
-                Error(e.Message);
                 Environment.ExitCode = 1;
             }
             return;
@@ -260,7 +259,7 @@ internal sealed class PickerWindow : Form
             FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false
         };
         var host = new TextBox { Left = 22, Top = 36, Width = 390 };
-        var port = new NumericUpDown { Left = 22, Top = 96, Width = 105, Minimum = 1, Maximum = 65535, Value = 23 };
+        var port = new NumericUpDown { Left = 22, Top = 96, Width = 105, Minimum = 1, Maximum = 65535, Value = 4000 };
         var consent = new CheckBox
         {
             Left = 22, Top = 140, Width = 390, Height = 40,
