@@ -1,0 +1,8 @@
+# v1	name	chunks_hex_comma	decoded_hex_or_dash	responses_hex_or_dash
+plain_chunks	48656c,6c6f	48656c6c6f	-
+literal_iac	41ff,ff42	41ff42	-
+do_naws	ff,fd1f	-	fffb1ffffa1f0064001efff0
+will_echo	fffb01	-	fffd01
+unsupported_do	fffd7f	-	fffc7f
+ttype_send	fffa1801ff,f0	-	fffa1800414e5349fff0
+fragmented_sga	ff,fd,03	-	fffb03

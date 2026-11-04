@@ -1,0 +1,6 @@
+# v1	name	argv_tokens_comma	normalized_tokens_comma
+root_help	help	--help
+leading_help	-h,connect	connect,--help
+nested_help	help,profile,list	profile,list,--help
+nested_end	profile,list,help	profile,list,--help
+nonhelp	connect,tapestries,--login,Merlin	connect,tapestries,--login,Merlin
