@@ -1,4 +1,4 @@
-name: Python self-test
+name: CI
 
 # Required checks must always be reported, including docs-only PRs.
 # No push-to-main trigger: validation runs on PRs and manual dispatch only.
@@ -203,8 +203,8 @@ jobs:
           path: dist/native/aeon-mud.exe
           if-no-files-found: error
 
-  ci-required:
-    name: ci-required
+  required-check:
+    name: CI
     runs-on: ubuntu-latest
     needs: [self-test, wezterm-launcher, native-launcher]
     if: ${{ always() }}
