@@ -1,0 +1,13 @@
+[package]
+name = "aeon-mud"
+version = "0.1.0"
+edition = "2021"
+description = "Native console client experiment for Aeon MUD"
+license = "MIT"
+
+[[bin]]
+name = "aeon-mud"
+path = "src/main.rs"
+
+# Keep the bootstrap dependency-free. Add crates when the Telnet/TUI
+# parity increments actually require them.
