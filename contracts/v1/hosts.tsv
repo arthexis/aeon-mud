@@ -1,0 +1,9 @@
+# v1	name	host_input	explicit_port_or_dash	expected_host_or_error	expected_port_or_dash
+basic	server.example:2069	-	server.example	2069
+ipv6_bracket	[::1]:4000	-	::1	4000
+no_port	server.example	-	server.example	4000
+ipv6_raw	::1	-	::1	4000
+zero_port	host:0	-	ERROR	-
+port_overflow	host:65536	-	ERROR	-
+conflicting_port	host:2069	4001	ERROR	-
+matching_port	host:2069	2069	host	2069
