@@ -173,7 +173,7 @@ class FinalStageOneContracts(unittest.TestCase):
                         raise OSError("synthetic disconnect")
                 controller.send_line.side_effect = send
                 reader = mock.Mock()
-                reader.read_key.return_value = Key("char", answer) if answer != "-" else Key("escape")
+                reader.read_key.return_value = Key("char", answer[0]) if answer != "-" else Key("escape")
                 with (
                     mock.patch.object(commands, "get_clipboard_text", return_value=clipboard[token]),
                     mock.patch.object(commands, "KeyReader", return_value=reader),
