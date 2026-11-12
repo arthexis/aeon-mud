@@ -5,6 +5,7 @@
 //! Telnet and persisted-profile behavior will be ported in subsequent steps.
 #[cfg(test)]
 mod contracts;
+mod outbound;
 
 use std::env;
 use std::io::{self, IsTerminal, Write};
