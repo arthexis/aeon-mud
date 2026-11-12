@@ -345,9 +345,15 @@ it cannot fit. The 1024-character limit includes the repeated prefix.
 Secret and login sends are not split.
 
 The Rust bootstrap now compiles the matching outbound split policy and tests
-it against the original unbroken-text contract cases. The native Telnet sender
-is not implemented yet, so Rust parity here covers the splitting policy,
-not live gameplay connections.
+it against the original unbroken-text contract cases. Python and Rust also
+execute the same deterministic `contracts/v1/outbound_splitting.tsv` fixtures
+for assignment prefixes, spoof continuations, natural word boundaries,
+whitespace preservation, Unicode (including U+001C–U+001F), oversized words,
+and exact 1024-character limits. Fixture checks compare exact chunk lengths
+and reconstruct every original payload without loss. Rust explicitly treats
+U+001C–U+001F as whitespace to agree with Python's `str.isspace()`.
+The native Telnet sender is not implemented yet, so Rust parity here covers
+the splitting policy, not live gameplay connections.
 
 ## Validate
 
