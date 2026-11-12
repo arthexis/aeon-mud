@@ -19,7 +19,8 @@ pub(crate) fn split_outbound_buffers(line: &str) -> Vec<String> {
     let assignment = line.split_once('=').and_then(|(head, _)| {
         let prefix_chars = head.chars().count() + 1;
         if !head.is_empty()
-            && !head.contains('\r') && !head.contains('\n')
+            && !head.contains('\r')
+            && !head.contains('\n')
             && prefix_chars < OUTBOUND_BUFFER_CHARS
         {
             Some(format!("{head}="))
@@ -69,14 +70,20 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, chunk)| {
-                let prefix = if index == 0 { first_prefix } else { next_prefix };
+                let prefix = if index == 0 {
+                    first_prefix
+                } else {
+                    next_prefix
+                };
                 chunk.strip_prefix(prefix).expect("expected chunk prefix")
             })
             .collect()
     }
 
     fn assert_limit(chunks: &[String]) {
-        assert!(chunks.iter().all(|chunk| chunk.chars().count() <= OUTBOUND_BUFFER_CHARS));
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= OUTBOUND_BUFFER_CHARS));
     }
 
     #[test]
@@ -88,7 +95,9 @@ mod tests {
         assert!(chunks.iter().all(|chunk| chunk.starts_with(prefix)));
         assert_limit(&chunks);
         assert_eq!(reassemble(&chunks, prefix, prefix), payload);
-        assert!(chunks[..chunks.len() - 1].iter().all(|chunk| chunk.ends_with(' ')));
+        assert!(chunks[..chunks.len() - 1]
+            .iter()
+            .all(|chunk| chunk.ends_with(' ')));
     }
 
     #[test]
@@ -97,10 +106,14 @@ mod tests {
         let chunks = split_outbound_buffers(&line);
         assert!(chunks.len() > 1);
         assert!(!chunks[0].starts_with(OUTBOUND_SPOOF_PREFIX));
-        assert!(chunks[1..].iter().all(|chunk| chunk.starts_with(OUTBOUND_SPOOF_PREFIX)));
+        assert!(chunks[1..]
+            .iter()
+            .all(|chunk| chunk.starts_with(OUTBOUND_SPOOF_PREFIX)));
         assert_limit(&chunks);
         assert_eq!(reassemble(&chunks, "", OUTBOUND_SPOOF_PREFIX), line);
-        assert!(chunks[..chunks.len() - 1].iter().all(|chunk| chunk.ends_with(' ')));
+        assert!(chunks[..chunks.len() - 1]
+            .iter()
+            .all(|chunk| chunk.ends_with(' ')));
     }
 
     #[test]
@@ -151,13 +164,17 @@ mod tests {
     #[test]
     fn contract_v1_unbroken_legacy_cases_still_match() {
         let fixture = include_str!("../../contracts/v1/outbound.tsv");
-        for row in fixture.lines().filter(|row| !row.is_empty() && !row.starts_with('#')) {
+        for row in fixture
+            .lines()
+            .filter(|row| !row.is_empty() && !row.starts_with('#'))
+        {
             let fields: Vec<_> = row.split('\t').collect();
             let character = fields[1];
             let length: usize = fields[2].parse().unwrap();
             let line = character.repeat(length);
             let chunks = split_outbound_buffers(&line);
-            let expected: Vec<usize> = fields[3].split(',')
+            let expected: Vec<usize> = fields[3]
+                .split(',')
                 .map(|part| part.parse().unwrap())
                 .collect();
             let actual: Vec<usize> = chunks.iter().map(|part| part.chars().count()).collect();
