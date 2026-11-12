@@ -224,7 +224,9 @@ mod tests {
                 match mode {
                     "assignment" => {
                         assert!(
-                            chunks.iter().all(|chunk| chunk.starts_with(prefix.as_str())),
+                            chunks
+                                .iter()
+                                .all(|chunk| chunk.starts_with(prefix.as_str())),
                             "{case}"
                         );
                         assert_eq!(
