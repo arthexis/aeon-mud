@@ -1,5 +1,6 @@
 """Regression tests for outbound MUD buffer boundaries."""
 import unittest
+from pathlib import Path
 
 from aeon_mud.config import OUTBOUND_BUFFER_CHARS, OUTBOUND_SPOOF_PREFIX
 from aeon_mud.terminal_text import split_outbound_buffers
@@ -75,6 +76,43 @@ class OutboundCommandPrefixTests(unittest.TestCase):
         chunks = split_outbound_buffers(prefix + payload)
         self.assertEqual("".join(chunk[len(prefix):] for chunk in chunks), payload)
         self.assertTrue(all(len(chunk) <= OUTBOUND_BUFFER_CHARS for chunk in chunks))
+
+    def test_shared_splitting_fixtures(self):
+        """The same deterministic TSV is exercised by Rust unit tests."""
+        fixture = Path(__file__).resolve().parents[1] / "contracts/v1/outbound_splitting.tsv"
+        tested = 0
+        for line in fixture.read_text(encoding="utf-8").splitlines():
+            if not line or line.startswith("#"):
+                continue
+            case, prefix_hex, pattern_hex, times, tail_hex, lengths, mode = line.split("\t")
+            decode = lambda value: bytes.fromhex(value).decode("utf-8") if value != "-" else ""
+            prefix = decode(prefix_hex)
+            pattern = decode(pattern_hex)
+            tail = decode(tail_hex)
+            payload = pattern * int(times) + tail
+            original = prefix + payload
+            chunks = split_outbound_buffers(original)
+            expected = [int(length) for length in lengths.split(",")]
+            self.assertEqual([len(chunk) for chunk in chunks], expected, case)
+            self.assertTrue(all(len(chunk) <= OUTBOUND_BUFFER_CHARS for chunk in chunks), case)
+            if len(chunks) > 1:
+                if mode == "assignment":
+                    self.assertTrue(all(chunk.startswith(prefix) for chunk in chunks), case)
+                    self.assertEqual("".join(chunk[len(prefix):] for chunk in chunks), payload, case)
+                elif mode == "spoof":
+                    self.assertTrue(all(chunk.startswith(OUTBOUND_SPOOF_PREFIX) for chunk in chunks[1:]), case)
+                    self.assertEqual(
+                        chunks[0] + "".join(chunk[len(OUTBOUND_SPOOF_PREFIX):] for chunk in chunks[1:]),
+                        original,
+                        case,
+                    )
+                else:
+                    self.fail(f"unknown fixture mode: {case}")
+            else:
+                self.assertEqual(chunks, [original], case)
+            tested += 1
+        self.assertGreaterEqual(tested, 14)
+
 
 if __name__ == "__main__":
     unittest.main()
