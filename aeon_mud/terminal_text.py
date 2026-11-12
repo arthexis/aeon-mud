@@ -120,7 +120,7 @@ def split_outbound_buffers(line: str) -> list[str]:
 
     # Command assignments are independent MUD commands: each buffer must
     # repeat everything up to and including the first "=".
-    match = re.match(r"^([^=\\r\\n]+=", line)
+    match = re.match(r"^([^=\r\n]+=)", line)
     command_prefix = match.group(1) if match else ""
     if command_prefix and len(command_prefix) < OUTBOUND_BUFFER_CHARS:
         payload = line[len(command_prefix):]
