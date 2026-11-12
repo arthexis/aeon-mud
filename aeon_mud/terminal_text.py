@@ -117,6 +117,20 @@ def strip_ansi(text: str) -> str:
 def split_outbound_buffers(line: str) -> list[str]:
     if len(line) <= OUTBOUND_BUFFER_CHARS:
         return [line]
+
+    # Command assignments are independent MUD commands: each buffer must
+    # repeat everything up to and including the first "=".
+    match = re.match(r"^([^=\\r\\n]+=", line)
+    command_prefix = match.group(1) if match else ""
+    if command_prefix and len(command_prefix) < OUTBOUND_BUFFER_CHARS:
+        payload = line[len(command_prefix):]
+        capacity = OUTBOUND_BUFFER_CHARS - len(command_prefix)
+        return [
+            command_prefix + payload[index:index + capacity]
+            for index in range(0, len(payload), capacity)
+        ]
+
+    # Ordinary long text retains the existing spoof continuation behavior.
     spoof_payload_chars = OUTBOUND_BUFFER_CHARS - len(OUTBOUND_SPOOF_PREFIX)
     chunks = [line[:OUTBOUND_BUFFER_CHARS]]
     remaining = line[OUTBOUND_BUFFER_CHARS:]
