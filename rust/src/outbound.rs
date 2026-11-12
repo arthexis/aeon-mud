@@ -48,7 +48,7 @@ pub(crate) fn split_outbound_buffers(line: &str) -> Vec<String> {
         if position + available < characters.len() {
             if let Some(index) = characters[position..position + available]
                 .iter()
-                .rposition(|ch| ch.is_whitespace() || matches!(ch, '\u{001c}'..='\u{001f}'))
+                .rposition(|ch| ch.is_whitespace() || matches!(*ch, '\u{001c}'..='\u{001f}'))
             {
                 count = index + 1;
             }
@@ -220,7 +220,7 @@ mod tests {
             if chunks.len() > 1 {
                 match mode {
                     "assignment" => {
-                        assert!(chunks.iter().all(|chunk| chunk.starts_with(&prefix)), "{case}");
+                        assert!(chunks.iter().all(|chunk| chunk.starts_with(prefix.as_str())), "{case}");
                         assert_eq!(reassemble(&chunks, &prefix, &prefix), format!("{}{tail}", pattern.repeat(repeat)), "{case}");
                     }
                     "spoof" => {
