@@ -19,7 +19,7 @@ pub(crate) fn split_outbound_buffers(line: &str) -> Vec<String> {
     let assignment = line.split_once('=').and_then(|(head, _)| {
         let prefix_chars = head.chars().count() + 1;
         if !head.is_empty()
-            && !head.contains(['\r', '\n'])
+            && !head.contains('\r') && !head.contains('\n')
             && prefix_chars < OUTBOUND_BUFFER_CHARS
         {
             Some(format!("{head}="))
