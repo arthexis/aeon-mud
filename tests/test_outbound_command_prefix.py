@@ -39,5 +39,42 @@ class OutboundCommandPrefixTests(unittest.TestCase):
         self.assertTrue(chunks[1].startswith(OUTBOUND_SPOOF_PREFIX))
 
 
+    def test_assignment_breaks_on_spaces_without_losing_text(self):
+        prefix = "describe="
+        payload = ("longword short " * 120) + "ending"
+        chunks = split_outbound_buffers(prefix + payload)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(chunk.startswith(prefix) for chunk in chunks))
+        self.assertTrue(all(len(chunk) <= OUTBOUND_BUFFER_CHARS for chunk in chunks))
+        self.assertEqual("".join(chunk[len(prefix):] for chunk in chunks), payload)
+        self.assertTrue(all(chunk[-1].isspace() for chunk in chunks[:-1]))
+
+    def test_spoof_breaks_on_spaces_without_losing_text(self):
+        line = ("alpha beta gamma " * 130) + "omega"
+        chunks = split_outbound_buffers(line)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(chunk.startswith(OUTBOUND_SPOOF_PREFIX) for chunk in chunks[1:]))
+        self.assertTrue(all(len(chunk) <= OUTBOUND_BUFFER_CHARS for chunk in chunks))
+        self.assertEqual(
+            chunks[0] + "".join(chunk[len(OUTBOUND_SPOOF_PREFIX):] for chunk in chunks[1:]),
+            line,
+        )
+        self.assertTrue(all(chunk[-1].isspace() for chunk in chunks[:-1]))
+
+    def test_hard_split_unbroken_oversized_word(self):
+        prefix = "description="
+        payload = "x" * (OUTBOUND_BUFFER_CHARS * 2)
+        chunks = split_outbound_buffers(prefix + payload)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk) <= OUTBOUND_BUFFER_CHARS for chunk in chunks))
+        self.assertEqual("".join(chunk[len(prefix):] for chunk in chunks), payload)
+
+    def test_whitespace_runs_preserved(self):
+        prefix = "say="
+        payload = ("hello  world\t again " * 90) + "end"
+        chunks = split_outbound_buffers(prefix + payload)
+        self.assertEqual("".join(chunk[len(prefix):] for chunk in chunks), payload)
+        self.assertTrue(all(len(chunk) <= OUTBOUND_BUFFER_CHARS for chunk in chunks))
+
 if __name__ == "__main__":
     unittest.main()
