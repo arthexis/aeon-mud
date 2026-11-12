@@ -199,7 +199,10 @@ mod tests {
         // The same TSV is executed by tests/test_outbound_command_prefix.py.
         let fixture = include_str!("../../contracts/v1/outbound_splitting.tsv");
         let mut tested = 0;
-        for line in fixture.lines().filter(|row| !row.is_empty() && !row.starts_with('#')) {
+        for line in fixture
+            .lines()
+            .filter(|row| !row.is_empty() && !row.starts_with('#'))
+        {
             let fields: Vec<_> = line.split('\t').collect();
             assert_eq!(fields.len(), 7, "{}", line);
             let case = fields[0];
@@ -220,14 +223,28 @@ mod tests {
             if chunks.len() > 1 {
                 match mode {
                     "assignment" => {
-                        assert!(chunks.iter().all(|chunk| chunk.starts_with(prefix.as_str())), "{case}");
-                        assert_eq!(reassemble(&chunks, &prefix, &prefix), format!("{}{tail}", pattern.repeat(repeat)), "{case}");
+                        assert!(
+                            chunks.iter().all(|chunk| chunk.starts_with(prefix.as_str())),
+                            "{case}"
+                        );
+                        assert_eq!(
+                            reassemble(&chunks, &prefix, &prefix),
+                            format!("{}{tail}", pattern.repeat(repeat)),
+                            "{case}"
+                        );
                     }
                     "spoof" => {
-                        assert!(chunks[1..]
-                            .iter()
-                            .all(|chunk| chunk.starts_with(OUTBOUND_SPOOF_PREFIX)), "{case}");
-                        assert_eq!(reassemble(&chunks, "", OUTBOUND_SPOOF_PREFIX), input, "{case}");
+                        assert!(
+                            chunks[1..]
+                                .iter()
+                                .all(|chunk| chunk.starts_with(OUTBOUND_SPOOF_PREFIX)),
+                            "{case}"
+                        );
+                        assert_eq!(
+                            reassemble(&chunks, "", OUTBOUND_SPOOF_PREFIX),
+                            input,
+                            "{case}"
+                        );
                     }
                     _ => panic!("unknown fixture mode: {case}"),
                 }
@@ -238,5 +255,4 @@ mod tests {
         }
         assert!(tested >= 14);
     }
-
 }
