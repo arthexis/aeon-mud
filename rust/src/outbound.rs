@@ -48,7 +48,7 @@ pub(crate) fn split_outbound_buffers(line: &str) -> Vec<String> {
         if position + available < characters.len() {
             if let Some(index) = characters[position..position + available]
                 .iter()
-                .rposition(|ch| ch.is_whitespace())
+                .rposition(|ch| ch.is_whitespace() || matches!(ch, '\u{001c}'..='\u{001f}'))
             {
                 count = index + 1;
             }
@@ -181,4 +181,62 @@ mod tests {
             assert_eq!(actual, expected, "fixture: {}", fields[0]);
         }
     }
+
+    fn decode_hex(value: &str) -> String {
+        if value == "-" {
+            return String::new();
+        }
+        let bytes: Vec<u8> = value
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn shared_splitting_fixtures_match_exact_boundaries_and_payloads() {
+        // The same TSV is executed by tests/test_outbound_command_prefix.py.
+        let fixture = include_str!("../../contracts/v1/outbound_splitting.tsv");
+        let mut tested = 0;
+        for line in fixture.lines().filter(|row| !row.is_empty() && !row.starts_with('#')) {
+            let fields: Vec<_> = line.split('\t').collect();
+            assert_eq!(fields.len(), 7, "{}", line);
+            let case = fields[0];
+            let prefix = decode_hex(fields[1]);
+            let pattern = decode_hex(fields[2]);
+            let repeat: usize = fields[3].parse().unwrap();
+            let tail = decode_hex(fields[4]);
+            let expected: Vec<usize> = fields[5]
+                .split(',')
+                .map(|value| value.parse().unwrap())
+                .collect();
+            let mode = fields[6];
+            let input = format!("{prefix}{}{tail}", pattern.repeat(repeat));
+            let chunks = split_outbound_buffers(&input);
+            let actual: Vec<usize> = chunks.iter().map(|chunk| chunk.chars().count()).collect();
+            assert_eq!(actual, expected, "boundary mismatch: {case}");
+            assert_limit(&chunks);
+            if chunks.len() > 1 {
+                match mode {
+                    "assignment" => {
+                        assert!(chunks.iter().all(|chunk| chunk.starts_with(&prefix)), "{case}");
+                        assert_eq!(reassemble(&chunks, &prefix, &prefix), format!("{}{tail}", pattern.repeat(repeat)), "{case}");
+                    }
+                    "spoof" => {
+                        assert!(chunks[1..]
+                            .iter()
+                            .all(|chunk| chunk.starts_with(OUTBOUND_SPOOF_PREFIX)), "{case}");
+                        assert_eq!(reassemble(&chunks, "", OUTBOUND_SPOOF_PREFIX), input, "{case}");
+                    }
+                    _ => panic!("unknown fixture mode: {case}"),
+                }
+            } else {
+                assert_eq!(chunks, vec![input], "{case}");
+            }
+            tested += 1;
+        }
+        assert!(tested >= 14);
+    }
+
 }
