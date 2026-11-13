@@ -335,10 +335,25 @@ Telnet is plaintext. The client adds guard rails around plaintext sessions, but
 it does not make Telnet cryptographically safe. For secure hops, use a SOCKS5
 proxy or a profile `proxy_command` such as OpenSSH `-W host:port`.
 
-Normal outbound sends longer than 1024 characters are split automatically. The
-first 1024 characters are sent unchanged. Continuation chunks are prefixed with
-`spoof ` while keeping every emitted line at 1024 characters or less. Secret and
-login sends are not split.
+Normal outbound sends longer than 1024 characters are split automatically.
+For input containing `=`, each chunk repeats the entire prefix through the
+first `=` (for example, `description=`) rather than using `spoof `.
+Inputs without `=` retain an unprefixed first chunk and use `spoof ` for
+continuations. Both variants prefer the last whitespace within the limit,
+preserve the whitespace without dropping text, and hard-split a word only when
+it cannot fit. The 1024-character limit includes the repeated prefix.
+Secret and login sends are not split.
+
+The Rust bootstrap now compiles the matching outbound split policy and tests
+it against the original unbroken-text contract cases. Python and Rust also
+execute the same deterministic `contracts/v1/outbound_splitting.tsv` fixtures
+for assignment prefixes, spoof continuations, natural word boundaries,
+whitespace preservation, Unicode (including U+001C–U+001F), oversized words,
+and exact 1024-character limits. Fixture checks compare exact chunk lengths
+and reconstruct every original payload without loss. Rust explicitly treats
+U+001C–U+001F as whitespace to agree with Python's `str.isspace()`.
+The native Telnet sender is not implemented yet, so Rust parity here covers
+the splitting policy, not live gameplay connections.
 
 ## Validate
 

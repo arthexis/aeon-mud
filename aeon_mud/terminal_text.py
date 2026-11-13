@@ -114,15 +114,39 @@ def strip_ansi(text: str) -> str:
     return ANSI_CSI_RE.sub("", ANSI_OSC_RE.sub("", text))
 
 
+def _split_at_whitespace(text: str, capacity: int) -> int:
+    """Prefer a whole-word boundary; hard-split only when unavoidable."""
+    if len(text) <= capacity:
+        return len(text)
+    for index in range(capacity - 1, -1, -1):
+        if text[index].isspace():
+            return index + 1
+    return capacity
+
+
 def split_outbound_buffers(line: str) -> list[str]:
     if len(line) <= OUTBOUND_BUFFER_CHARS:
         return [line]
-    spoof_payload_chars = OUTBOUND_BUFFER_CHARS - len(OUTBOUND_SPOOF_PREFIX)
-    chunks = [line[:OUTBOUND_BUFFER_CHARS]]
-    remaining = line[OUTBOUND_BUFFER_CHARS:]
+
+    # Each command assignment repeats the prefix through the first "=".
+    match = re.match(r"^([^=\r\n]+=)", line)
+    command_prefix = match.group(1) if match else ""
+    if command_prefix and len(command_prefix) < OUTBOUND_BUFFER_CHARS:
+        remaining = line[len(command_prefix):]
+        first_prefix = continuation_prefix = command_prefix
+    else:
+        # Long lines without an assignment retain the traditional spoof
+        # continuation, including when a command prefix cannot fit.
+        remaining = line
+        first_prefix = ""
+        continuation_prefix = OUTBOUND_SPOOF_PREFIX
+
+    chunks: list[str] = []
+    prefix = first_prefix
     while remaining:
-        chunks.append(OUTBOUND_SPOOF_PREFIX + remaining[:spoof_payload_chars])
-        remaining = remaining[spoof_payload_chars:]
+        capacity = OUTBOUND_BUFFER_CHARS - len(prefix)
+        cutoff = _split_at_whitespace(remaining, capacity)
+        chunks.append(prefix + remaining[:cutoff])
+        remaining = remaining[cutoff:]
+        prefix = continuation_prefix
     return chunks
-
-
