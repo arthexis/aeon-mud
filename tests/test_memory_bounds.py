@@ -145,7 +145,7 @@ class MemoryBoundsTests(unittest.TestCase):
                     handle.write(record)
             tracemalloc.start()
             try:
-                with mock.patch.object(Dpapi, "unprotect", side_effect=lambda data: data):
+                with mock.patch.object(Dpapi, "unprotect", new=staticmethod(lambda data: data)):
                     decrypt_transcript(source, output)
                 _, peak = tracemalloc.get_traced_memory()
             finally:
