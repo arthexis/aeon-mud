@@ -470,16 +470,25 @@ class MudUi:
     def _display_lines(self, width: int) -> list[str]:
         if self._display_cache_width == width:
             return self._display_cache_rows
-        rows: deque[str] = deque(maxlen=MAX_DISPLAY_CACHE_ROWS)
+        rows: deque[str] = deque()
+        cache_bytes = 0
         rules = list(self.watch_rules)
         for line in self.lines:
             raw_line = str(line)
             bounded = (strip_ansi(raw_line) if len(raw_line) > MAX_SCROLLBACK_LINE_CHARS else raw_line)[-MAX_SCROLLBACK_LINE_CHARS:]
             try:
                 display_line = apply_watch_rules(bounded, rules)
-                rows.extend(wrap_ansi(display_line, width))
+                rendered = wrap_ansi(display_line, width)
             except Exception:
-                rows.extend(wrap_ansi(strip_ansi(bounded), width))
+                rendered = wrap_ansi(strip_ansi(bounded), width)
+            for row in rendered:
+                rows.append(row)
+                cache_bytes += len(row.encode("utf-8", "replace"))
+                # Count encoded data, not only row count. The budget is a
+                # proxy for heap/RSS, not a claim of a strict Python RSS cap.
+                while rows and (len(rows) > MAX_DISPLAY_CACHE_ROWS or cache_bytes > MAX_DISPLAY_CACHE_BYTES):
+                    removed = rows.popleft()
+                    cache_bytes -= len(removed.encode("utf-8", "replace"))
         self._display_cache_width = width
         self._display_cache_rows = list(rows) or [""]
         return self._display_cache_rows
