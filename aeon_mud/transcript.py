@@ -90,19 +90,18 @@ class Transcript:
 
 
 def decrypt_transcript(source: Path, destination: Path | None) -> None:
-    lines: list[str] = []
-    with source.open("rb") as handle:
-        for raw_line in handle:
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            decrypted = Dpapi.unprotect(base64.b64decode(raw_line))
-            lines.append(decrypted.decode("utf-8"))
-    output = "\n".join(lines) + ("\n" if lines else "")
+    """Stream decrypted JSONL; memory is bounded by one source record."""
     if destination:
         ensure_parent(destination)
-        destination.write_text(output, encoding="utf-8", newline="\n")
+        # Do not truncate the output before a source open succeeds.
+        with source.open("rb") as reader, destination.open("w", encoding="utf-8", newline="\n") as writer:
+            for raw_line in reader:
+                if raw_line.strip():
+                    writer.write(Dpapi.unprotect(base64.b64decode(raw_line.strip())).decode("utf-8") + "\n")
     else:
-        sys.stdout.write(output)
+        with source.open("rb") as reader:
+            for raw_line in reader:
+                if raw_line.strip():
+                    sys.stdout.write(Dpapi.unprotect(base64.b64decode(raw_line.strip())).decode("utf-8") + "\n")
 
 
