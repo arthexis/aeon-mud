@@ -168,7 +168,10 @@ class _SgrState:
     def carry(self) -> str:
         if not self.attrs:
             return ""
-        return "\x1b[0m" + "".join(
+        # Each rendered row ends with SGR reset, so a canonical replay
+        # needs only active attributes. This also preserves legacy red-only
+        # wrapping output, which the built-in CLI self-test asserts exactly.
+        return "".join(
             "\x1b[" + ";".join(map(str, codes)) + "m"
             for codes in self.attrs.values()
         )
