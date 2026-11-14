@@ -348,7 +348,9 @@ class MudUi:
             for index, part in enumerate(parts):
                 if index > 0:
                     self.lines.append("")
-                self.lines[-1] = (self.lines[-1] + part)[-MAX_SCROLLBACK_LINE_CHARS:]
+                combined = self.lines[-1] + part
+                # A clipped line must not start in the middle of an ANSI escape.
+                self.lines[-1] = (strip_ansi(combined) if len(combined) > MAX_SCROLLBACK_LINE_CHARS else combined)[-MAX_SCROLLBACK_LINE_CHARS:]
             if len(self.lines) > self.profile.max_scrollback:
                 self.lines = self.lines[-self.profile.max_scrollback:]
             retained = []
@@ -374,7 +376,8 @@ class MudUi:
         rows: deque[str] = deque(maxlen=MAX_DISPLAY_CACHE_ROWS)
         rules = list(self.watch_rules)
         for line in self.lines:
-            bounded = str(line)[-MAX_SCROLLBACK_LINE_CHARS:]
+            raw_line = str(line)
+            bounded = (strip_ansi(raw_line) if len(raw_line) > MAX_SCROLLBACK_LINE_CHARS else raw_line)[-MAX_SCROLLBACK_LINE_CHARS:]
             try:
                 display_line = apply_watch_rules(bounded, rules)
                 rows.extend(wrap_ansi(display_line, width))
