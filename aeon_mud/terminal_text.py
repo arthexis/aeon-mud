@@ -134,7 +134,7 @@ def iter_outbound_buffers(line: str):
         yield line
         return
 
-    match = re.match(r"^([^=\\r\\n]+=)", line)
+    match = re.match(r"^([^=\r\n]+=)", line)
     command_prefix = match.group(1) if match else ""
     if command_prefix and len(command_prefix) < OUTBOUND_BUFFER_CHARS:
         position = len(command_prefix)
