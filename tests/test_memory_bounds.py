@@ -3,6 +3,7 @@ import argparse
 import base64
 import gc
 import io
+import json
 import os
 from pathlib import Path
 import socket
@@ -17,9 +18,10 @@ from unittest import mock
 from aeon_mud.commands import coerce_runtime_setting
 from aeon_mud.config import (
     MAX_ACTIVE_SGR_CHARS, MAX_DISPLAY_CACHE_BYTES, MAX_DISPLAY_CACHE_ROWS, MAX_HISTORY_ENTRIES,
+    MAX_HISTORY_COMMAND_CHARS, MAX_HISTORY_FILE_BYTES,
     MAX_SCROLLBACK_LINE_CHARS, MAX_SCROLLBACK_LINES, MAX_SCROLLBACK_TOTAL_CHARS,
 )
-from aeon_mud.profiles import Profile
+from aeon_mud.profiles import Profile, HistoryStore
 from aeon_mud.session import SessionController, receiver_loop
 from aeon_mud import session as session_module
 from aeon_mud.telnet import TelnetCodec
@@ -372,6 +374,99 @@ class MemoryBoundsTests(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("different files", completed.stderr)
             self.assertEqual(source.read_bytes(), b"not encrypted but still precious\n")
+
+    def test_persisted_history_reads_only_recent_bounded_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "history.json"
+            expected = [f"cmd_{index}" for index in range(4000)]
+            contents = {"profiles": {"memory": expected, "unrelated": ["do not touch"]}}
+            path.write_text(json.dumps(contents), encoding="utf-8")
+            original = path.read_bytes()
+            profile = self.profile(max_history=3)
+            store = HistoryStore(path)
+            self.assertEqual(store.list_for(profile), expected[-3:])
+            self.assertEqual(store.data["profiles"]["memory"], expected[-3:])
+            # Loading has no side effect on the persisted history or other profiles.
+            self.assertEqual(path.read_bytes(), original)
+            store.add(profile, "next")
+            self.assertEqual(HistoryStore(path).list_for(profile), expected[-2:] + ["next"])
+            self.assertEqual(HistoryStore(path).data["profiles"]["unrelated"], ["do not touch"])
+            oversized_command = "X" * (MAX_HISTORY_COMMAND_CHARS + 1)
+            size_before = path.stat().st_size
+            HistoryStore(path).add(profile, oversized_command)
+            self.assertEqual(path.stat().st_size, size_before)
+
+    def test_oversized_history_is_read_only_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "history.json"
+            # A sparse file avoids allocating the oversized payload in tests.
+            with path.open("wb") as writer:
+                writer.seek(MAX_HISTORY_FILE_BYTES + 10)
+                writer.write(b"!")
+            original_size = path.stat().st_size
+            store = HistoryStore(path)
+            self.assertTrue(store.read_only_oversized)
+            self.assertEqual(store.list_for(self.profile()), [])
+            store.add(self.profile(), "look")
+            self.assertEqual(path.stat().st_size, original_size)
+            with self.assertRaises(ValueError):
+                store.clear("memory")
+            self.assertEqual(path.stat().st_size, original_size)
+
+    def test_reconnect_storm_coalesces_login_to_latest_connection(self):
+        profile = self.profile(reconnect=True, reconnect_initial_delay=0.0)
+        initial = mock.Mock(name="initial_transport")
+        controller = SessionController(profile, initial, TelnetCodec(),
+                                       mock.Mock(), mock.Mock(), None)
+        controller.character_login = ("Hero", "synthetic-secret")
+        entered = threading.Event()
+        release = threading.Event()
+        seen: list[object] = []
+
+        def controlled_send(expected_transport=None):
+            if expected_transport is initial:
+                entered.set()
+                self.assertTrue(release.wait(timeout=2.0))
+                raise session_module.ConnectionChanged("old generation")
+            seen.append(expected_transport)
+
+        with mock.patch.object(controller, "send_character_login", side_effect=controlled_send):
+            controller.start_login_worker()
+            self.assertTrue(entered.wait(timeout=2.0))
+            newest = None
+            for i in range(80):
+                newest = mock.Mock(name=f"generation_{i}")
+                controller.install_connection(newest, TelnetCodec())
+                controller.start_login_worker()
+                self.assertLessEqual(len(controller._login_workers), 1)
+            self.assertEqual(seen, [])
+            release.set()
+            controller.join_login_workers(timeout=2.0)
+            self.assertEqual(seen, [newest], "latest generation must not lose login")
+            self.assertFalse(any(w.is_alive() for w in controller._login_workers))
+        controller.close()
+
+    def test_long_ansi_line_retains_compound_style_without_partial_escape(self):
+        ui = MudUi(self.profile())
+        ui.render = lambda *args, **kwargs: None
+        # The cut passes through a truecolor SGR; clipping must preserve it
+        # and reconstruct the previous independent bold attribute.
+        seq = "\x1b[38;2;100;80;20m"
+        trailing = "b" * (MAX_SCROLLBACK_LINE_CHARS - MAX_ACTIVE_SGR_CHARS - len(seq) + 3)
+        incoming = "\x1b[1m" + ("a" * 1700) + seq + trailing
+        ui.append_output(incoming)
+        retained = ui.lines[-1]
+        self.assertLessEqual(len(retained), MAX_SCROLLBACK_LINE_CHARS)
+        self.assertTrue(retained.startswith("\x1b[1m" + seq), repr(retained[:90]))
+        self.assertTrue(retained.endswith(trailing))
+        self.assertEqual(len(retained), len("\x1b[1m" + seq) + len(trailing))
+        ui.append_output("postfix")
+        self.assertIn("\x1b[1m", ui.lines[-1])
+        self.assertIn(seq, ui.lines[-1])
+        rows = wrap_ansi(ui.lines[-1], 40)
+        self.assertIn("\x1b[1m", rows[-1])
+        self.assertIn(seq, rows[-1])
+        self.assertLessEqual(sum(map(len, ui.lines)), MAX_SCROLLBACK_TOTAL_CHARS)
 
     def test_python_cli_help_smoke(self):
         completed = subprocess.run(
