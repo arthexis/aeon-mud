@@ -345,6 +345,34 @@ class MemoryBoundsTests(unittest.TestCase):
             self.assertGreater(output.stat().st_size, 10000000)
             self.assertLess(peak, 8 * 1024 * 1024)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "Linux-only RSS estimate")
+    def test_linux_rss_peak_delta_under_bounded_output(self):
+        import resource
+
+        # ru_maxrss is a process high-water mark in KiB on Linux, not a
+        # per-object measurement. This detects gross regressions only.
+        before_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        ui = MudUi(self.profile())
+        ui.render = lambda *args, **kwargs: None
+        for _ in range(64):
+            ui.append_output("é" * 8192 + "\n")
+        ui._display_lines(80)
+        after_kib = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        self.assertLess(after_kib - before_kib, 96 * 1024)
+
+    def test_cli_rejects_same_input_output_without_truncation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "encrypted.dpapi.jsonl"
+            source.write_bytes(b"not encrypted but still precious\n")
+            completed = subprocess.run(
+                [sys.executable, "-m", "aeon_mud", "transcript", "decrypt",
+                 str(source), "--out", str(source)],
+                capture_output=True, text=True, timeout=15, check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("different files", completed.stderr)
+            self.assertEqual(source.read_bytes(), b"not encrypted but still precious\n")
+
     def test_python_cli_help_smoke(self):
         completed = subprocess.run(
             [sys.executable, "-m", "aeon_mud", "--help"],
