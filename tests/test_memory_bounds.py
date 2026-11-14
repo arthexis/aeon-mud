@@ -26,7 +26,7 @@ from aeon_mud.session import SessionController, receiver_loop
 from aeon_mud import session as session_module
 from aeon_mud.telnet import TelnetCodec
 from aeon_mud.terminal import MudUi, update_sgr_state, wrap_ansi
-from aeon_mud.terminal_text import strip_ansi
+from aeon_mud.terminal_text import strip_ansi, ANSI_SGR_RE
 from aeon_mud.terminal_text import iter_outbound_buffers, split_outbound_buffers
 from aeon_mud.transcript import decrypt_transcript
 from aeon_mud.security import Dpapi
@@ -467,6 +467,22 @@ class MemoryBoundsTests(unittest.TestCase):
         self.assertIn("\x1b[1m", rows[-1])
         self.assertIn(seq, rows[-1])
         self.assertLessEqual(sum(map(len, ui.lines)), MAX_SCROLLBACK_TOTAL_CHARS)
+
+    def test_batch_and_total_scrollback_cutoffs_do_not_split_ansi(self):
+        ui = MudUi(self.profile(max_scrollback=5000))
+        ui.render = lambda *args, **kwargs: None
+        # Place a full SGR sequence across the batch-retention cutoff.
+        seq = "\x1b[32m"
+        tail = "z" * (MAX_SCROLLBACK_TOTAL_CHARS - MAX_ACTIVE_SGR_CHARS - len(seq) + 3)
+        ui.append_output("\x1b[1m" + "a" * 1700 + seq + tail)
+        self.assertLessEqual(len(ui.lines[-1]), MAX_SCROLLBACK_LINE_CHARS)
+        self.assertTrue(ui.lines[-1].startswith("\x1b[1m" + seq))
+        # Force a second, independent cut at the aggregate scrollback budget.
+        for _ in range(70):
+            ui.append_output("\x1b[1;34m" + "x" * 16000 + "\n")
+        self.assertLessEqual(sum(map(len, ui.lines)), MAX_SCROLLBACK_TOTAL_CHARS)
+        for line in ui.lines:
+            self.assertNotIn("\x1b", ANSI_SGR_RE.sub("", line))
 
     def test_python_cli_help_smoke(self):
         completed = subprocess.run(
