@@ -155,6 +155,36 @@ class SessionController:
         self.last_io = time.monotonic()
         self.last_keepalive = 0.0
         self.ready_for_commands = threading.Event()
+        self._closed = False
+        self._login_workers: set[threading.Thread] = set()
+
+    def _login_worker(self) -> None:
+        try:
+            send_character_login_after_ready(self)
+        finally:
+            with self.lock:
+                self._login_workers.discard(threading.current_thread())
+
+    def start_login_worker(self) -> None:
+        """Register login workers so shutdown can wait for them once."""
+        with self.lock:
+            if self._closed or self.character_login is None:
+                return
+            worker = threading.Thread(target=self._login_worker, daemon=True)
+            self._login_workers.add(worker)
+            try:
+                worker.start()
+            except BaseException:
+                self._login_workers.discard(worker)
+                raise
+
+    def join_login_workers(self, timeout: float = 2.0) -> None:
+        deadline = time.monotonic() + timeout
+        with self.lock:
+            workers = tuple(self._login_workers)
+        for worker in workers:
+            if worker is not threading.current_thread() and worker.ident is not None:
+                worker.join(timeout=max(0.0, deadline - time.monotonic()))
 
     def current_connection(self) -> tuple[Transport, TelnetCodec] | None:
         with self.lock:
@@ -193,6 +223,11 @@ class SessionController:
         return True
 
     def close(self) -> None:
+        with self.lock:
+            self._closed = True
+            # Release pending login workers rather than waiting out their
+            # normal first-banner timeout after the session has been closed.
+            self.ready_for_commands.set()
         self.mark_disconnected(None, "")
 
     def send_raw(self, data: bytes, expected_transport: Transport | None = None) -> None:
@@ -370,10 +405,7 @@ def reconnect_session(
             if controller.character_login is not None:
                 # Login must not block the receiver: it depends on the
                 # receiver processing the server's first output.
-                threading.Thread(
-                    target=send_character_login_after_ready,
-                    args=(controller,), daemon=True,
-                ).start()
+                controller.start_login_worker()
             if initial_banner:
                 transcript.write("recv", initial_banner)
                 ui.append_output(initial_banner)
@@ -515,20 +547,26 @@ def session_loop(
         transport.close()
         raise
 
-    transcript = Transcript(profile)
-    ui = MudUi(profile, no_alt_screen=args.no_alt_screen)
-    controller = SessionController(
-        profile, transport, codec, transcript, ui, password,
-        private_peer_required=private_peer_required,
-    )
-    if character is not None:
-        controller.character_login = (character, character_password)
-    stop = threading.Event()
-    receiver = threading.Thread(
-        target=receiver_loop,
-        args=(stop, transcript, controller),
-        daemon=True,
-    )
+    # This initialization occurs after socket/proxy creation: it must be
+    # transactional, otherwise a Transcript/MudUi/Thread error leaks transport.
+    try:
+        transcript = Transcript(profile)
+        ui = MudUi(profile, no_alt_screen=args.no_alt_screen)
+        controller = SessionController(
+            profile, transport, codec, transcript, ui, password,
+            private_peer_required=private_peer_required,
+        )
+        if character is not None:
+            controller.character_login = (character, character_password)
+        stop = threading.Event()
+        receiver = threading.Thread(
+            target=receiver_loop,
+            args=(stop, transcript, controller),
+            daemon=True,
+        )
+    except BaseException:
+        transport.close()
+        raise
     reader: KeyReader | None = None
 
     try:
@@ -541,10 +579,7 @@ def session_loop(
             controller.observe_output(initial_banner)
         receiver.start()
         if character is not None:
-            threading.Thread(
-                target=send_character_login_after_ready,
-                args=(controller,), daemon=True,
-            ).start()
+            controller.start_login_worker()
         while not stop.is_set():
             controller.maybe_send_keepalive()
             key = reader.read_key(timeout=0.1)
@@ -634,12 +669,16 @@ def session_loop(
     finally:
         stop.set()
         try:
-            controller.close()
+            try:
+                controller.close()
+            finally:
+                try:
+                    # Closing a live transport normally interrupts recv().
+                    if receiver.is_alive():
+                        receiver.join(timeout=2.0)
+                finally:
+                    controller.join_login_workers(timeout=2.0)
         finally:
-            # Closing the transport unblocks the receiver on normal sockets.
-            # A bounded join avoids leaving shutdown to a daemon by default.
-            if receiver.is_alive():
-                receiver.join(timeout=2.0)
             try:
                 if reader is not None:
                     reader.close()
