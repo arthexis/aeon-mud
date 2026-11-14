@@ -1,4 +1,5 @@
 """Hermetic regression tests for memory bounds and resource cleanup (#34)."""
+import argparse
 import base64
 import gc
 import io
@@ -15,13 +16,15 @@ from unittest import mock
 
 from aeon_mud.commands import coerce_runtime_setting
 from aeon_mud.config import (
-    MAX_ACTIVE_SGR_CHARS, MAX_DISPLAY_CACHE_ROWS, MAX_HISTORY_ENTRIES,
+    MAX_ACTIVE_SGR_CHARS, MAX_DISPLAY_CACHE_BYTES, MAX_DISPLAY_CACHE_ROWS, MAX_HISTORY_ENTRIES,
     MAX_SCROLLBACK_LINE_CHARS, MAX_SCROLLBACK_LINES, MAX_SCROLLBACK_TOTAL_CHARS,
 )
 from aeon_mud.profiles import Profile
 from aeon_mud.session import SessionController, receiver_loop
+from aeon_mud import session as session_module
 from aeon_mud.telnet import TelnetCodec
 from aeon_mud.terminal import MudUi, update_sgr_state, wrap_ansi
+from aeon_mud.terminal_text import strip_ansi
 from aeon_mud.terminal_text import iter_outbound_buffers, split_outbound_buffers
 from aeon_mud.transcript import decrypt_transcript
 from aeon_mud.security import Dpapi
@@ -180,6 +183,149 @@ class MemoryBoundsTests(unittest.TestCase):
         self.assertTrue(recovered.closed)
         opener.assert_called_once()
         ui.append_output.assert_any_call("back online\n")
+
+    def test_ansi_carry_preserves_independent_styles_after_adversarial_repeats(self):
+        text = "\x1b[1m" + "\x1b[31m" * 5000 + "ABCD"
+        rows = wrap_ansi(text, 2)
+        self.assertEqual([strip_ansi(row) for row in rows], ["AB", "CD"])
+        self.assertIn("\x1b[1m", rows[1])  # bold is not lost when color repeats
+        self.assertIn("\x1b[31m", rows[1])
+        self.assertLessEqual(len(update_sgr_state("", "\x1b[1;31m")), MAX_ACTIVE_SGR_CHARS)
+        truecolor = wrap_ansi("\x1b[1;4m\x1b[38;2;12;34;56mXY", 1)
+        self.assertIn("\x1b[1m", truecolor[1])
+        self.assertIn("\x1b[4m", truecolor[1])
+        self.assertIn("\x1b[38;2;12;34;56m", truecolor[1])
+        cleared = wrap_ansi("\x1b[1;31m\x1b[22;39mXY", 1)
+        self.assertNotIn("\x1b[1m", cleared[1])
+        self.assertNotIn("\x1b[31m", cleared[1])
+
+    def test_cache_has_encoded_byte_budget(self):
+        ui = MudUi(self.profile())
+        # UTF-8 output occupies more memory than the character count suggests.
+        ui.lines = ["é" * 12000 for _ in range(120)]
+        rows = ui._display_lines(1024)
+        self.assertTrue(rows)
+        self.assertLessEqual(len(rows), MAX_DISPLAY_CACHE_ROWS)
+        self.assertLessEqual(
+            sum(len(row.encode("utf-8", "replace")) for row in rows),
+            MAX_DISPLAY_CACHE_BYTES,
+        )
+        tracemalloc.start()
+        try:
+            ui._invalidate_display_cache()
+            ui._display_lines(1024)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        # Payload budget is not a strict Python heap or physical RSS bound.
+        self.assertLess(peak, 32 * 1024 * 1024)
+
+    def test_startup_failures_close_transport_before_main_loop(self):
+        profile = self.profile(allow_plaintext=True, require_private_host=False)
+        args = argparse.Namespace(
+            login=None, accept_host_change=False, yes=True, no_alt_screen=True
+        )
+        for failed in ("Transcript", "MudUi", "KeyReader"):
+            with self.subTest(failed=failed):
+                transport = mock.Mock()
+                ui = mock.Mock()
+                ui.started = False
+                transcript = mock.Mock()
+                transcript.path = None
+                with (
+                    mock.patch.object(session_module, "open_session_transport",
+                                      return_value=(transport, TelnetCodec(), "")),
+                    mock.patch.object(session_module, "run_sanity_checks"),
+                    mock.patch.object(session_module, "set_connection_tab_title"),
+                    mock.patch.object(session_module, "Transcript", return_value=transcript),
+                    mock.patch.object(session_module, "MudUi", return_value=ui),
+                    mock.patch.object(session_module, "KeyReader") as reader,
+                ):
+                    if failed == "Transcript":
+                        session_module.Transcript.side_effect = RuntimeError("transcript")
+                    elif failed == "MudUi":
+                        session_module.MudUi.side_effect = RuntimeError("terminal")
+                    else:
+                        reader.side_effect = RuntimeError("reader")
+                    with self.assertRaises(RuntimeError):
+                        session_module.session_loop(profile, args)
+                transport.close.assert_called_once()
+
+    def test_registered_login_workers_prune_and_join_on_close(self):
+        controller = SessionController(
+            self.profile(), mock.Mock(), TelnetCodec(), mock.Mock(), mock.Mock(), None,
+        )
+        controller.character_login = ("Player", "secret")
+        entered = threading.Event()
+        release = threading.Event()
+
+        def fake_login(_controller):
+            entered.set()
+            self.assertTrue(release.wait(timeout=2.0))
+
+        with mock.patch.object(session_module, "send_character_login_after_ready", side_effect=fake_login):
+            controller.start_login_worker()
+            self.assertTrue(entered.wait(timeout=2.0))
+            self.assertEqual(len(controller._login_workers), 1)
+            controller.close()
+            release.set()
+            controller.join_login_workers()
+            self.assertTrue(all(not worker.is_alive() for worker in controller._login_workers))
+            controller.start_login_worker()
+            self.assertEqual(len(controller._login_workers), 1)
+
+    def test_decrypt_rejects_same_source_symlink_and_hardlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "input.dpapi.jsonl"
+            source.write_bytes(b"untouched\n")
+            self.assertEqual(source.read_bytes(), b"untouched\n")
+            for alias in (source, source.parent / "." / source.name):
+                with self.subTest(alias=str(alias)):
+                    with self.assertRaises(ValueError):
+                        decrypt_transcript(source, alias)
+                    self.assertEqual(source.read_bytes(), b"untouched\n")
+            hardlink = Path(directory) / "hardlink"
+            os.link(source, hardlink)
+            with self.assertRaises(ValueError):
+                decrypt_transcript(source, hardlink)
+            self.assertEqual(source.read_bytes(), b"untouched\n")
+            symlink = Path(directory) / "symlink"
+            try:
+                symlink.symlink_to(source)
+            except (OSError, NotImplementedError):
+                return  # symlinks require elevated permissions on some Windows runners
+            with self.assertRaises(ValueError):
+                decrypt_transcript(source, symlink)
+            self.assertEqual(source.read_bytes(), b"untouched\n")
+
+    def test_decrypt_error_is_atomic_for_existing_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.dpapi.jsonl"
+            destination = Path(directory) / "decoded.jsonl"
+            encoded = base64.b64encode(b'{"payload":"test"}')
+            original = (encoded + b"\n") * 3
+            source.write_bytes(original)
+            destination.write_text("previous output\n", encoding="utf-8")
+            attempts = 0
+
+            def fail_second(data):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 2:
+                    raise RuntimeError("bad encrypted record")
+                return data
+
+            with mock.patch.object(Dpapi, "unprotect", new=staticmethod(fail_second)):
+                with self.assertRaises(RuntimeError):
+                    decrypt_transcript(source, destination)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(destination.read_text(encoding="utf-8"), "previous output\n")
+            self.assertEqual(list(Path(directory).glob(".decoded.jsonl.*.tmp")), [])
+            with mock.patch.object(Dpapi, "unprotect", new=staticmethod(lambda data: data)):
+                decrypt_transcript(source, destination)
+            self.assertEqual(destination.read_text(encoding="utf-8"),
+                             '{"payload":"test"}\n' * 3)
+            self.assertEqual(source.read_bytes(), original)
 
     def test_decrypt_transcript_streams_large_file(self):
         with tempfile.TemporaryDirectory() as directory:
