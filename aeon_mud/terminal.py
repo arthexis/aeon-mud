@@ -301,6 +301,33 @@ def wrap_ansi(text: str, width: int) -> list[str]:
     rows.append("".join(parts))
     return rows
 
+
+def _clip_ansi_line(text: str, limit: int) -> str:
+    """Keep the newest physical-line tail with a compact effective SGR carry.
+
+    Reserve a fixed budget for the style prefix; never start a retained tail
+    in the middle of a complete CSI control sequence. Do not discard color
+    merely because a physical line exceeded its retention limit.
+    """
+    if len(text) <= limit:
+        return text
+    if "\x1b" not in text:
+        return text[-limit:]
+    start = max(0, len(text) - limit + MAX_ACTIVE_SGR_CHARS)
+    style = _SgrState()
+    for match in ANSI_SGR_RE.finditer(text):
+        if match.start() >= start:
+            break
+        style.apply(match.group(0))
+        if match.end() > start:
+            start = match.end()
+    for match in ANSI_CSI_RE.finditer(text):
+        if match.start() < start < match.end():
+            start = match.end()
+            break
+    return style.carry() + text[start:]
+
+
 class MudUi:
     def __init__(self, profile: Profile, no_alt_screen: bool = False) -> None:
         self.profile = profile
@@ -450,7 +477,7 @@ class MudUi:
                     self.lines.append("")
                 combined = self.lines[-1] + part
                 # A clipped line must not start in the middle of an ANSI escape.
-                self.lines[-1] = (strip_ansi(combined) if len(combined) > MAX_SCROLLBACK_LINE_CHARS else combined)[-MAX_SCROLLBACK_LINE_CHARS:]
+                self.lines[-1] = _clip_ansi_line(combined, MAX_SCROLLBACK_LINE_CHARS)
             if len(self.lines) > self.profile.max_scrollback:
                 self.lines = self.lines[-self.profile.max_scrollback:]
             retained = []
@@ -478,7 +505,7 @@ class MudUi:
         rules = list(self.watch_rules)
         for line in self.lines:
             raw_line = str(line)
-            bounded = (strip_ansi(raw_line) if len(raw_line) > MAX_SCROLLBACK_LINE_CHARS else raw_line)[-MAX_SCROLLBACK_LINE_CHARS:]
+            bounded = _clip_ansi_line(raw_line, MAX_SCROLLBACK_LINE_CHARS)
             try:
                 display_line = apply_watch_rules(bounded, rules)
                 rendered = wrap_ansi(display_line, width)
