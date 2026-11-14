@@ -60,12 +60,20 @@ class ProcessTransport(Transport):
         return os.read(self.process.stdout.fileno(), size)
 
     def close(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+        try:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=2)
+        finally:
+            # Popen does not close PIPE descriptors simply because its child
+            # exited. Close both parent ends even on timeout/error.
+            for stream in (self.process.stdin, self.process.stdout):
+                if stream is not None and not stream.closed:
+                    stream.close()
 
 
 class ConnectionUnavailable(OSError):

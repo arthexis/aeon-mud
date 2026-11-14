@@ -2,8 +2,10 @@
 from __future__ import annotations
 import base64
 import json
+import os
 import re
 import sys
+import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -90,19 +92,44 @@ class Transcript:
 
 
 def decrypt_transcript(source: Path, destination: Path | None) -> None:
-    lines: list[str] = []
-    with source.open("rb") as handle:
-        for raw_line in handle:
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            decrypted = Dpapi.unprotect(base64.b64decode(raw_line))
-            lines.append(decrypted.decode("utf-8"))
-    output = "\n".join(lines) + ("\n" if lines else "")
-    if destination:
-        ensure_parent(destination)
-        destination.write_text(output, encoding="utf-8", newline="\n")
-    else:
-        sys.stdout.write(output)
+    """Decrypt one record at a time without damaging the source or a prior output.
 
+    Reject identical paths, symlink aliases and hard links before any writes.
+    An independent output is replaced only after every record succeeds.
+    """
+    if destination is not None and (
+        source.resolve() == destination.resolve()
+        or (destination.exists() and source.samefile(destination))
+    ):
+        raise ValueError("Transcript input and output must be different files")
 
+    def stream_to(writer) -> None:
+        with source.open("rb") as reader:
+            for raw_line in reader:
+                encoded = raw_line.strip()
+                if encoded:
+                    plain = Dpapi.unprotect(base64.b64decode(encoded)).decode("utf-8")
+                    writer.write(plain)
+                    writer.write("\n")
+
+    if destination is None:
+        stream_to(sys.stdout)
+        return
+
+    ensure_parent(destination)
+    temp_name: str | None = None
+    try:
+        # NamedTemporaryFile uses exclusive creation (0600 on POSIX). Keeping
+        # it beside the output allows os.replace to be atomic on a filesystem.
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n",
+            prefix=f".{destination.name}.", suffix=".tmp",
+            dir=destination.parent, delete=False,
+        ) as writer:
+            temp_name = writer.name
+            stream_to(writer)
+        os.replace(temp_name, destination)
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            Path(temp_name).unlink(missing_ok=True)

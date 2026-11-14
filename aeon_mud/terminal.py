@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import threading
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -152,46 +153,183 @@ def truncate_ansi(text: str, width: int) -> str:
     return "".join(out)
 
 
-def update_sgr_state(active: str, sequence: str) -> str:
-    params = sequence[2:-1]
-    raw_codes = ["0"] if not params else params.split(";")
-    codes: list[int] = []
-    for raw_code in raw_codes:
+class _SgrState:
+    """Bounded effective SGR attributes, not an append-only escape history.
+
+    Each recognized attribute has a single semantic slot. Repeated SGR codes
+    therefore consume constant memory and carry independent effects (e.g.
+    bold + foreground color) across wrapped rows. Unknown numeric codes are
+    retained only within the same safety budget.
+    """
+
+    def __init__(self) -> None:
+        self.attrs: dict[str, tuple[int, ...]] = {}
+
+    def carry(self) -> str:
+        if not self.attrs:
+            return ""
+        # Each rendered row ends with SGR reset, so a canonical replay
+        # needs only active attributes. This also preserves legacy red-only
+        # wrapping output, which the built-in CLI self-test asserts exactly.
+        return "".join(
+            "\x1b[" + ";".join(map(str, codes)) + "m"
+            for codes in self.attrs.values()
+        )
+
+    def _put(self, key: str, codes: tuple[int, ...]) -> None:
+        previous = self.attrs.get(key)
+        self.attrs[key] = codes
+        if len(self.carry()) > MAX_ACTIVE_SGR_CHARS:
+            # Do not drop unrelated active attributes on an oversized or
+            # unknown extension. We cannot preserve unsupported vendor
+            # semantics without an unlimited memory budget.
+            if previous is None:
+                self.attrs.pop(key, None)
+            else:
+                self.attrs[key] = previous
+
+    def apply(self, sequence: str) -> None:
+        params = sequence[2:-1]
         try:
-            codes.append(int(raw_code or "0"))
+            codes = [int(value or "0") for value in params.split(";")] if params else [0]
         except ValueError:
-            return active + sequence
-    if 0 not in codes:
-        return active + sequence
-    reset_index = max(index for index, code in enumerate(codes) if code == 0)
-    return sequence if any(code != 0 for code in codes[reset_index + 1 :]) else ""
+            return
+        index = 0
+        while index < len(codes):
+            code = codes[index]
+            index += 1
+            if code == 0:
+                self.attrs.clear()
+            elif code in (1, 2):
+                self._put("bold" if code == 1 else "faint", (code,))
+            elif code == 22:
+                self.attrs.pop("bold", None)
+                self.attrs.pop("faint", None)
+            elif code in (3, 20):
+                self._put("italic", (code,))
+            elif code == 23:
+                self.attrs.pop("italic", None)
+            elif code in (4, 21):
+                self._put("underline", (code,))
+            elif code == 24:
+                self.attrs.pop("underline", None)
+            elif code in (5, 6):
+                self._put("blink", (code,))
+            elif code == 25:
+                self.attrs.pop("blink", None)
+            elif code in (7, 8, 9, 53, 26):
+                self._put(f"flag:{code}", (code,))
+            elif code in (27, 28, 29, 55, 50):
+                self.attrs.pop(f"flag:{ {27: 7, 28: 8, 29: 9, 55: 53, 50: 26}[code]}", None)
+            elif 10 <= code <= 19:
+                if code == 10:
+                    self.attrs.pop("font", None)
+                else:
+                    self._put("font", (code,))
+            elif code in (51, 52):
+                self._put("frame", (code,))
+            elif code == 54:
+                self.attrs.pop("frame", None)
+            elif 60 <= code <= 64:
+                self._put("ideogram", (code,))
+            elif code == 65:
+                self.attrs.pop("ideogram", None)
+            elif code in (73, 74):
+                self._put("script", (code,))
+            elif code == 75:
+                self.attrs.pop("script", None)
+            elif 30 <= code <= 37 or 90 <= code <= 97:
+                self._put("foreground", (code,))
+            elif 40 <= code <= 47 or 100 <= code <= 107:
+                self._put("background", (code,))
+            elif code in (39, 49, 59):
+                self.attrs.pop({39: "foreground", 49: "background", 59: "underline_color"}[code], None)
+            elif code in (38, 48, 58):
+                key = {38: "foreground", 48: "background", 58: "underline_color"}[code]
+                # SGR 5;n (indexed) and 2;r;g;b (true color) are atomic.
+                if index < len(codes) and codes[index] == 5 and index + 1 < len(codes):
+                    self._put(key, tuple([code] + codes[index:index + 2]))
+                    index += 2
+                elif index < len(codes) and codes[index] == 2 and index + 3 < len(codes):
+                    self._put(key, tuple([code] + codes[index:index + 4]))
+                    index += 4
+                else:
+                    self._put(f"unknown:{code}", (code,))
+            else:
+                self._put(f"unknown:{code}", (code,))
+
+
+def update_sgr_state(active: str, sequence: str) -> str:
+    """Compatibility helper for one semantic SGR transition."""
+    state = _SgrState()
+    for previous in ANSI_SGR_RE.finditer(active):
+        state.apply(previous.group(0))
+    state.apply(sequence)
+    return state.carry()
 
 
 def wrap_ansi(text: str, width: int) -> list[str]:
+    """Wrap ANSI text in linear time, retaining only effective SGR attributes."""
     if width <= 0:
         return [""]
-    rows = [""]
+    rows: list[str] = []
+    parts: list[str] = []
+    state = _SgrState()
     visible = 0
-    active_sgr = ""
-    index = 0
-    for match in ANSI_SGR_RE.finditer(text):
-        for char in text[index : match.start()]:
-            if visible >= width:
-                rows.append(active_sgr)
+
+    def add_text(chunk: str) -> None:
+        nonlocal parts, visible
+        position = 0
+        while position < len(chunk):
+            if visible == width:
+                rows.append("".join(parts))
+                carry = state.carry()
+                parts = [carry] if carry else []
                 visible = 0
-            rows[-1] += char
-            visible += 1
-        sequence = match.group(0)
-        rows[-1] += sequence
-        active_sgr = update_sgr_state(active_sgr, sequence)
-        index = match.end()
-    for char in text[index:]:
-        if visible >= width:
-            rows.append(active_sgr)
-            visible = 0
-        rows[-1] += char
-        visible += 1
+            amount = min(width - visible, len(chunk) - position)
+            parts.append(chunk[position:position + amount])
+            visible += amount
+            position += amount
+
+    position = 0
+    for match in ANSI_SGR_RE.finditer(text):
+        add_text(text[position:match.start()])
+        parts.append(match.group(0))
+        state.apply(match.group(0))
+        position = match.end()
+    add_text(text[position:])
+    rows.append("".join(parts))
     return rows
+
+
+def _clip_ansi_line(text: str, limit: int) -> str:
+    """Keep the newest physical-line tail with a compact effective SGR carry.
+
+    Reserve a fixed budget for the style prefix; never start a retained tail
+    in the middle of a complete CSI control sequence. Do not discard color
+    merely because a physical line exceeded its retention limit.
+    """
+    if len(text) <= limit:
+        return text
+    if limit <= MAX_ACTIVE_SGR_CHARS:
+        # There is insufficient space for a full style carry; retain only
+        # printable payload rather than leaving a partial escape sequence.
+        return strip_ansi(text)[-limit:]
+    if "\x1b" not in text:
+        return text[-limit:]
+    start = max(0, len(text) - limit + MAX_ACTIVE_SGR_CHARS)
+    style = _SgrState()
+    for match in ANSI_SGR_RE.finditer(text):
+        if match.start() >= start:
+            break
+        style.apply(match.group(0))
+        if match.end() > start:
+            start = match.end()
+    for match in ANSI_CSI_RE.finditer(text):
+        if match.start() < start < match.end():
+            start = match.end()
+            break
+    return style.carry() + text[start:]
 
 
 class MudUi:
@@ -332,15 +470,29 @@ class MudUi:
             return describe_watch_rules(self.watch_rules)
 
     def append_output(self, text: str) -> None:
+        # Cap one received batch as well as retained lines. A long physical
+        # line must not bypass max_scrollback (which counts lines only).
+        text = _clip_ansi_line(text, MAX_SCROLLBACK_TOTAL_CHARS)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         with self.lock:
             parts = text.split("\n")
             for index, part in enumerate(parts):
                 if index > 0:
                     self.lines.append("")
-                self.lines[-1] += part
+                combined = self.lines[-1] + part
+                # A clipped line must not start in the middle of an ANSI escape.
+                self.lines[-1] = _clip_ansi_line(combined, MAX_SCROLLBACK_LINE_CHARS)
             if len(self.lines) > self.profile.max_scrollback:
-                self.lines = self.lines[-self.profile.max_scrollback :]
+                self.lines = self.lines[-self.profile.max_scrollback:]
+            retained = []
+            budget = MAX_SCROLLBACK_TOTAL_CHARS
+            for line in reversed(self.lines):
+                if budget <= 0:
+                    break
+                value = _clip_ansi_line(line, budget)
+                retained.append(value)
+                budget -= len(value)
+            self.lines = list(reversed(retained)) or [""]
             self._invalidate_display_cache()
             self.render()
 
@@ -352,16 +504,27 @@ class MudUi:
     def _display_lines(self, width: int) -> list[str]:
         if self._display_cache_width == width:
             return self._display_cache_rows
-        rows: list[str] = []
+        rows: deque[str] = deque()
+        cache_bytes = 0
         rules = list(self.watch_rules)
         for line in self.lines:
+            raw_line = str(line)
+            bounded = _clip_ansi_line(raw_line, MAX_SCROLLBACK_LINE_CHARS)
             try:
-                display_line = apply_watch_rules(line, rules)
-                rows.extend(wrap_ansi(display_line, width))
+                display_line = apply_watch_rules(bounded, rules)
+                rendered = wrap_ansi(display_line, width)
             except Exception:
-                rows.extend(wrap_ansi(strip_ansi(str(line)), width))
+                rendered = wrap_ansi(strip_ansi(bounded), width)
+            for row in rendered:
+                rows.append(row)
+                cache_bytes += len(row.encode("utf-8", "replace"))
+                # Count encoded data, not only row count. The budget is a
+                # proxy for heap/RSS, not a claim of a strict Python RSS cap.
+                while rows and (len(rows) > MAX_DISPLAY_CACHE_ROWS or cache_bytes > MAX_DISPLAY_CACHE_BYTES):
+                    removed = rows.popleft()
+                    cache_bytes -= len(removed.encode("utf-8", "replace"))
         self._display_cache_width = width
-        self._display_cache_rows = rows or [""]
+        self._display_cache_rows = list(rows) or [""]
         return self._display_cache_rows
 
     @staticmethod

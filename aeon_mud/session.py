@@ -16,7 +16,7 @@ from .profiles import *
 from .security import *
 from .telnet import *
 from .transport import *
-from .terminal_text import TerminalStreamDecoder, sanitize_terminal_text, strip_ansi
+from .terminal_text import TerminalStreamDecoder, sanitize_terminal_text, strip_ansi, iter_outbound_buffers
 from .input import KeyReader, fast_page_scroll_amount
 from .terminal import MudUi
 from .commands import *
@@ -155,6 +155,41 @@ class SessionController:
         self.last_io = time.monotonic()
         self.last_keepalive = 0.0
         self.ready_for_commands = threading.Event()
+        self._closed = False
+        self._login_workers: set[threading.Thread] = set()
+        self._login_running = False
+        self._login_requested_transport: Transport | None = None
+
+    def start_login_worker(self) -> None:
+        """Coalesce rapid reconnects to one worker serving the latest transport."""
+        with self.lock:
+            if self._closed or self.character_login is None or self.transport is None:
+                return
+            self._login_requested_transport = self.transport
+            if self._login_running:
+                # A running worker will process the newest generation after
+                # its current wait is interrupted. Never spawn a backlog.
+                return
+            self._login_running = True
+            # Preserve the public worker target for existing CLI integrations.
+            worker = threading.Thread(
+                target=send_character_login_after_ready, args=(self,), daemon=True,
+            )
+            self._login_workers = {worker}
+            try:
+                worker.start()
+            except BaseException:
+                self._login_running = False
+                self._login_workers.clear()
+                raise
+
+    def join_login_workers(self, timeout: float = 2.0) -> None:
+        deadline = time.monotonic() + timeout
+        with self.lock:
+            workers = tuple(self._login_workers)
+        for worker in workers:
+            if worker is not threading.current_thread() and worker.ident is not None:
+                worker.join(timeout=max(0.0, deadline - time.monotonic()))
 
     def current_connection(self) -> tuple[Transport, TelnetCodec] | None:
         with self.lock:
@@ -173,7 +208,9 @@ class SessionController:
             self.sent_password = False
             self.last_io = time.monotonic()
             self.last_keepalive = 0.0
+            old_ready = self.ready_for_commands
             self.ready_for_commands = threading.Event()
+            old_ready.set()  # release login wait for a superseded connection
         if old_transport is not None and old_transport is not transport:
             old_transport.close()
         self.ui.set_connected(True)
@@ -185,6 +222,7 @@ class SessionController:
             old_transport = self.transport
             self.transport = None
             self.codec = None
+            self.ready_for_commands.set()  # interrupt stale login waits
         if old_transport is not None:
             old_transport.close()
         self.ui.set_connected(False)
@@ -193,6 +231,11 @@ class SessionController:
         return True
 
     def close(self) -> None:
+        with self.lock:
+            self._closed = True
+            # Release pending login workers rather than waiting out their
+            # normal first-banner timeout after the session has been closed.
+            self.ready_for_commands.set()
         self.mark_disconnected(None, "")
 
     def send_raw(self, data: bytes, expected_transport: Transport | None = None) -> None:
@@ -245,18 +288,22 @@ class SessionController:
         # A number of MUDs drop application commands received while their
         # initial Telnet/banner handshake is underway. Wait for first visible
         # server output; bounded fallback keeps silent servers usable.
-        self.ready_for_commands.wait(timeout=2.0)
-        outbound_lines = [line] if secret else split_outbound_buffers(line)
-        for index, outbound_line in enumerate(outbound_lines):
+        with self.lock:
+            ready = self.ready_for_commands
+        ready.wait(timeout=2.0)
+        outbound_lines = (line,) if secret else iter_outbound_buffers(line)
+        sent = 0
+        for outbound_line in outbound_lines:
+            if sent:
+                time.sleep(self.profile.paste_line_delay)
             data = (outbound_line + self.profile.newline).encode(self.profile.encoding, "replace")
             self.send_raw(data, expected_transport=expected_transport)
             self.transcript.write("send", outbound_line, secret=secret)
-            if index < len(outbound_lines) - 1:
-                time.sleep(self.profile.paste_line_delay)
+            sent += 1
         if remember and not secret:
             self.ui.remember(line)
-        if len(outbound_lines) > 1 and not secret:
-            self.ui.set_status(f"Sent {len(outbound_lines)} buffers; continuations used spoof")
+        if sent > 1 and not secret:
+            self.ui.set_status(f"Sent {sent} buffers; continuations used spoof")
 
     def send_character_login(self, expected_transport: Transport | None = None) -> None:
         if self.character_login is None:
@@ -368,10 +415,7 @@ def reconnect_session(
             if controller.character_login is not None:
                 # Login must not block the receiver: it depends on the
                 # receiver processing the server's first output.
-                threading.Thread(
-                    target=send_character_login_after_ready,
-                    args=(controller,), daemon=True,
-                ).start()
+                controller.start_login_worker()
             if initial_banner:
                 transcript.write("recv", initial_banner)
                 ui.append_output(initial_banner)
@@ -381,17 +425,35 @@ def reconnect_session(
 
 
 def send_character_login_after_ready(controller: SessionController) -> None:
-    current = controller.current_connection()
-    if current is None:
-        return
-    transport, _ = current
-    try:
-        controller.send_character_login(expected_transport=transport)
-    except ConnectionChanged:
-        # A reconnect superseded this worker; the new connection owns login.
-        return
-    except (OSError, ValueError) as exc:
-        controller.ui.set_status(f"Character login failed: {exc}")
+    """Serve the latest login generation without growing the thread count.
+
+    Direct invocation remains supported for historical callers and fixtures.
+    """
+    with controller.lock:
+        tracked = controller._login_running
+    while True:
+        with controller.lock:
+            if controller._closed:
+                controller._login_requested_transport = None
+                controller._login_running = False
+                return
+            transport = controller._login_requested_transport
+            controller._login_requested_transport = None
+            if transport is None and not tracked:
+                transport = controller.transport  # historical direct call
+            if transport is None:
+                controller._login_running = False
+                return
+        try:
+            controller.send_character_login(expected_transport=transport)
+        except ConnectionChanged:
+            pass  # superseded by a newer connection
+        except (OSError, ValueError) as exc:
+            controller.ui.set_status(f"Character login failed: {exc}")
+        with controller.lock:
+            if not tracked or controller._closed or controller._login_requested_transport is None:
+                controller._login_running = False
+                return
 
 
 def receiver_loop(
@@ -513,20 +575,26 @@ def session_loop(
         transport.close()
         raise
 
-    transcript = Transcript(profile)
-    ui = MudUi(profile, no_alt_screen=args.no_alt_screen)
-    controller = SessionController(
-        profile, transport, codec, transcript, ui, password,
-        private_peer_required=private_peer_required,
-    )
-    if character is not None:
-        controller.character_login = (character, character_password)
-    stop = threading.Event()
-    receiver = threading.Thread(
-        target=receiver_loop,
-        args=(stop, transcript, controller),
-        daemon=True,
-    )
+    # This initialization occurs after socket/proxy creation: it must be
+    # transactional, otherwise a Transcript/MudUi/Thread error leaks transport.
+    try:
+        transcript = Transcript(profile)
+        ui = MudUi(profile, no_alt_screen=args.no_alt_screen)
+        controller = SessionController(
+            profile, transport, codec, transcript, ui, password,
+            private_peer_required=private_peer_required,
+        )
+        if character is not None:
+            controller.character_login = (character, character_password)
+        stop = threading.Event()
+        receiver = threading.Thread(
+            target=receiver_loop,
+            args=(stop, transcript, controller),
+            daemon=True,
+        )
+    except BaseException:
+        transport.close()
+        raise
     reader: KeyReader | None = None
 
     try:
@@ -539,10 +607,7 @@ def session_loop(
             controller.observe_output(initial_banner)
         receiver.start()
         if character is not None:
-            threading.Thread(
-                target=send_character_login_after_ready,
-                args=(controller,), daemon=True,
-            ).start()
+            controller.start_login_worker()
         while not stop.is_set():
             controller.maybe_send_keepalive()
             key = reader.read_key(timeout=0.1)
@@ -631,10 +696,22 @@ def session_loop(
                 ui.insert_text(key.char)
     finally:
         stop.set()
-        controller.close()
-        if reader is not None:
-            reader.close()
-        ui.close()
+        try:
+            try:
+                controller.close()
+            finally:
+                try:
+                    # Closing a live transport normally interrupts recv().
+                    if receiver.is_alive():
+                        receiver.join(timeout=2.0)
+                finally:
+                    controller.join_login_workers(timeout=2.0)
+        finally:
+            try:
+                if reader is not None:
+                    reader.close()
+            finally:
+                ui.close()
         if transcript.path:
             print(f"Log: {transcript.path}")
 

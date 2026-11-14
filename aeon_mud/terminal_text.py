@@ -124,29 +124,36 @@ def _split_at_whitespace(text: str, capacity: int) -> int:
     return capacity
 
 
-def split_outbound_buffers(line: str) -> list[str]:
-    if len(line) <= OUTBOUND_BUFFER_CHARS:
-        return [line]
+def iter_outbound_buffers(line: str):
+    """Yield exact canonical chunks without retaining the whole output list.
 
-    # Each command assignment repeats the prefix through the first "=".
+    The public list-returning splitter stays unchanged for Python/Rust contract
+    consumers; live sends use this iterator to keep transient RAM bounded.
+    """
+    if len(line) <= OUTBOUND_BUFFER_CHARS:
+        yield line
+        return
+
     match = re.match(r"^([^=\r\n]+=)", line)
     command_prefix = match.group(1) if match else ""
     if command_prefix and len(command_prefix) < OUTBOUND_BUFFER_CHARS:
-        remaining = line[len(command_prefix):]
-        first_prefix = continuation_prefix = command_prefix
+        position = len(command_prefix)
+        prefix = continuation_prefix = command_prefix
     else:
-        # Long lines without an assignment retain the traditional spoof
-        # continuation, including when a command prefix cannot fit.
-        remaining = line
-        first_prefix = ""
+        position = 0
+        prefix = ""
         continuation_prefix = OUTBOUND_SPOOF_PREFIX
 
-    chunks: list[str] = []
-    prefix = first_prefix
-    while remaining:
+    while position < len(line):
         capacity = OUTBOUND_BUFFER_CHARS - len(prefix)
-        cutoff = _split_at_whitespace(remaining, capacity)
-        chunks.append(prefix + remaining[:cutoff])
-        remaining = remaining[cutoff:]
+        # Only inspect a bounded window. Slicing the entire suffix on every
+        # iteration was quadratic for very long input.
+        cutoff = _split_at_whitespace(line[position : position + capacity + 1], capacity)
+        yield prefix + line[position : position + cutoff]
+        position += cutoff
         prefix = continuation_prefix
-    return chunks
+
+
+def split_outbound_buffers(line: str) -> list[str]:
+    """Legacy materialized splitter used by the shared Python/Rust fixtures."""
+    return list(iter_outbound_buffers(line))

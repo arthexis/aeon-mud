@@ -43,8 +43,9 @@ def coerce_runtime_setting(field_name: str, value: Any) -> Any:
     if field_name in {"max_history", "max_scrollback"}:
         if not isinstance(value, int) or isinstance(value, bool):
             raise ValueError(f"{field_name} must be a positive integer")
-        if value < 1:
-            raise ValueError(f"{field_name} must be at least 1")
+        maximum = MAX_HISTORY_ENTRIES if field_name == "max_history" else MAX_SCROLLBACK_LINES
+        if not 1 <= value <= maximum:
+            raise ValueError(f"{field_name} must be between 1 and {maximum}")
         return value
     if field_name in {
         "paste_line_delay",

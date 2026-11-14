@@ -38,6 +38,12 @@ class Profile:
     max_history: int = 200
     max_scrollback: int = 5000
 
+    def __post_init__(self) -> None:
+        for name, maximum in (("max_history", MAX_HISTORY_ENTRIES), ("max_scrollback", MAX_SCROLLBACK_LINES)):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be an integer between 1 and {maximum}")
+
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> "Profile":
         allowed = set(cls.__dataclass_fields__.keys()) - {"name"}
@@ -131,16 +137,38 @@ class KnownHosts:
 class HistoryStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or history_path()
-        self.data = load_json(self.path, {"profiles": {}})
+        # Bound transient JSON decoding as well as the history returned to UI.
+        # An oversized existing file stays untouched and cannot be silently
+        # overwritten by a subsequent command.
+        self.read_only_oversized = (
+            self.path.exists() and self.path.stat().st_size > MAX_HISTORY_FILE_BYTES
+        )
+        self.data = (
+            {"profiles": {}} if self.read_only_oversized
+            else load_json(self.path, {"profiles": {}})
+        )
         self.data.setdefault("profiles", {})
 
     def list_for(self, profile: Profile) -> list[str]:
         values = self.data["profiles"].get(profile.label(), [])
-        return [value for value in values if isinstance(value, str)]
+        if not isinstance(values, list):
+            return []
+        # Iterate backward without copying an unbounded historical list.
+        result: list[str] = []
+        for value in reversed(values):
+            if isinstance(value, str) and len(value) <= MAX_HISTORY_COMMAND_CHARS:
+                result.append(value)
+                if len(result) >= profile.max_history:
+                    break
+        result.reverse()
+        self.data["profiles"][profile.label()] = result
+        return result.copy()
 
     def add(self, profile: Profile, command: str) -> None:
         command = command.rstrip("\r\n")
-        if not command:
+        if self.read_only_oversized or not command or len(command) > MAX_HISTORY_COMMAND_CHARS:
+            # The command is still sent normally; only unsafe history retention
+            # is disabled. Do not overwrite an oversized preexisting file.
             return
         values = self.list_for(profile)
         if values and values[-1] == command:
@@ -152,6 +180,8 @@ class HistoryStore:
         save_json(self.path, self.data)
 
     def clear(self, name: str) -> None:
+        if self.read_only_oversized:
+            raise ValueError("History file exceeds safe load limit; back it up or reduce it before editing")
         self.data["profiles"][name] = []
         save_json(self.path, self.data)
 
