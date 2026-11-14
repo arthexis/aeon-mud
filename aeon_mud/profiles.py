@@ -38,6 +38,12 @@ class Profile:
     max_history: int = 200
     max_scrollback: int = 5000
 
+    def __post_init__(self) -> None:
+        for name, maximum in (("max_history", MAX_HISTORY_ENTRIES), ("max_scrollback", MAX_SCROLLBACK_LINES)):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be an integer between 1 and {maximum}")
+
     @classmethod
     def from_dict(cls, name: str, data: dict[str, Any]) -> "Profile":
         allowed = set(cls.__dataclass_fields__.keys()) - {"name"}
