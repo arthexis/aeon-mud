@@ -157,23 +157,30 @@ class SessionController:
         self.ready_for_commands = threading.Event()
         self._closed = False
         self._login_workers: set[threading.Thread] = set()
+        self._login_running = False
+        self._login_requested_transport: Transport | None = None
 
     def start_login_worker(self) -> None:
-        """Track live login workers, pruning completed reconnect generations."""
+        """Coalesce rapid reconnects to one worker serving the latest transport."""
         with self.lock:
-            if self._closed or self.character_login is None:
+            if self._closed or self.character_login is None or self.transport is None:
                 return
-            self._login_workers = {worker for worker in self._login_workers if worker.is_alive()}
-            # Preserve the historical worker target/args contract, including
-            # callers that instrument deferred login through Thread().
+            self._login_requested_transport = self.transport
+            if self._login_running:
+                # A running worker will process the newest generation after
+                # its current wait is interrupted. Never spawn a backlog.
+                return
+            self._login_running = True
+            # Preserve the public worker target for existing CLI integrations.
             worker = threading.Thread(
                 target=send_character_login_after_ready, args=(self,), daemon=True,
             )
-            self._login_workers.add(worker)
+            self._login_workers = {worker}
             try:
                 worker.start()
             except BaseException:
-                self._login_workers.discard(worker)
+                self._login_running = False
+                self._login_workers.clear()
                 raise
 
     def join_login_workers(self, timeout: float = 2.0) -> None:
@@ -201,7 +208,9 @@ class SessionController:
             self.sent_password = False
             self.last_io = time.monotonic()
             self.last_keepalive = 0.0
+            old_ready = self.ready_for_commands
             self.ready_for_commands = threading.Event()
+            old_ready.set()  # release login wait for a superseded connection
         if old_transport is not None and old_transport is not transport:
             old_transport.close()
         self.ui.set_connected(True)
@@ -213,6 +222,7 @@ class SessionController:
             old_transport = self.transport
             self.transport = None
             self.codec = None
+            self.ready_for_commands.set()  # interrupt stale login waits
         if old_transport is not None:
             old_transport.close()
         self.ui.set_connected(False)
@@ -278,7 +288,9 @@ class SessionController:
         # A number of MUDs drop application commands received while their
         # initial Telnet/banner handshake is underway. Wait for first visible
         # server output; bounded fallback keeps silent servers usable.
-        self.ready_for_commands.wait(timeout=2.0)
+        with self.lock:
+            ready = self.ready_for_commands
+        ready.wait(timeout=2.0)
         outbound_lines = (line,) if secret else iter_outbound_buffers(line)
         sent = 0
         for outbound_line in outbound_lines:
@@ -413,17 +425,35 @@ def reconnect_session(
 
 
 def send_character_login_after_ready(controller: SessionController) -> None:
-    current = controller.current_connection()
-    if current is None:
-        return
-    transport, _ = current
-    try:
-        controller.send_character_login(expected_transport=transport)
-    except ConnectionChanged:
-        # A reconnect superseded this worker; the new connection owns login.
-        return
-    except (OSError, ValueError) as exc:
-        controller.ui.set_status(f"Character login failed: {exc}")
+    """Serve the latest login generation without growing the thread count.
+
+    Direct invocation remains supported for historical callers and fixtures.
+    """
+    with controller.lock:
+        tracked = controller._login_running
+    while True:
+        with controller.lock:
+            if controller._closed:
+                controller._login_requested_transport = None
+                controller._login_running = False
+                return
+            transport = controller._login_requested_transport
+            controller._login_requested_transport = None
+            if transport is None and not tracked:
+                transport = controller.transport  # historical direct call
+            if transport is None:
+                controller._login_running = False
+                return
+        try:
+            controller.send_character_login(expected_transport=transport)
+        except ConnectionChanged:
+            pass  # superseded by a newer connection
+        except (OSError, ValueError) as exc:
+            controller.ui.set_status(f"Character login failed: {exc}")
+        with controller.lock:
+            if not tracked or controller._closed or controller._login_requested_transport is None:
+                controller._login_running = False
+                return
 
 
 def receiver_loop(
