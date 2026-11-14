@@ -158,19 +158,17 @@ class SessionController:
         self._closed = False
         self._login_workers: set[threading.Thread] = set()
 
-    def _login_worker(self) -> None:
-        try:
-            send_character_login_after_ready(self)
-        finally:
-            with self.lock:
-                self._login_workers.discard(threading.current_thread())
-
     def start_login_worker(self) -> None:
-        """Register login workers so shutdown can wait for them once."""
+        """Track live login workers, pruning completed reconnect generations."""
         with self.lock:
             if self._closed or self.character_login is None:
                 return
-            worker = threading.Thread(target=self._login_worker, daemon=True)
+            self._login_workers = {worker for worker in self._login_workers if worker.is_alive()}
+            # Preserve the historical worker target/args contract, including
+            # callers that instrument deferred login through Thread().
+            worker = threading.Thread(
+                target=send_character_login_after_ready, args=(self,), daemon=True,
+            )
             self._login_workers.add(worker)
             try:
                 worker.start()
