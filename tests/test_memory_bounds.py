@@ -135,6 +135,52 @@ class MemoryBoundsTests(unittest.TestCase):
             b.close()
             a.close()
 
+    def test_reconnect_releases_old_transport_and_worker(self):
+        stop = threading.Event()
+
+        class FakeTransport:
+            def __init__(self, outcomes):
+                self.outcomes = iter(outcomes)
+                self.closed = False
+
+            def recv(self, _size):
+                outcome = next(self.outcomes)
+                if outcome is None:
+                    stop.set()
+                    return b""
+                return outcome
+
+            def sendall(self, _data):
+                pass
+
+            def close(self):
+                self.closed = True
+
+        original = FakeTransport([b""])
+        recovered = FakeTransport([b"back online\n", None])
+        profile = self.profile(
+            reconnect=True, reconnect_initial_delay=0.0, reconnect_max_delay=0.0
+        )
+        ui = mock.Mock()
+        transcript = mock.Mock()
+        controller = SessionController(
+            profile, original, TelnetCodec(), transcript, ui, None
+        )
+        with mock.patch(
+            "aeon_mud.session.open_session_transport",
+            return_value=(recovered, TelnetCodec(), ""),
+        ) as opener, mock.patch("aeon_mud.session.run_sanity_checks"):
+            receiver = threading.Thread(
+                target=receiver_loop, args=(stop, transcript, controller), daemon=True
+            )
+            receiver.start()
+            receiver.join(timeout=2.0)
+        self.assertFalse(receiver.is_alive())
+        self.assertTrue(original.closed)
+        self.assertTrue(recovered.closed)
+        opener.assert_called_once()
+        ui.append_output.assert_any_call("back online\n")
+
     def test_decrypt_transcript_streams_large_file(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.jsonl"
