@@ -311,6 +311,10 @@ def _clip_ansi_line(text: str, limit: int) -> str:
     """
     if len(text) <= limit:
         return text
+    if limit <= MAX_ACTIVE_SGR_CHARS:
+        # There is insufficient space for a full style carry; retain only
+        # printable payload rather than leaving a partial escape sequence.
+        return strip_ansi(text)[-limit:]
     if "\x1b" not in text:
         return text[-limit:]
     start = max(0, len(text) - limit + MAX_ACTIVE_SGR_CHARS)
@@ -468,7 +472,7 @@ class MudUi:
     def append_output(self, text: str) -> None:
         # Cap one received batch as well as retained lines. A long physical
         # line must not bypass max_scrollback (which counts lines only).
-        text = text[-MAX_SCROLLBACK_TOTAL_CHARS:]
+        text = _clip_ansi_line(text, MAX_SCROLLBACK_TOTAL_CHARS)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         with self.lock:
             parts = text.split("\n")
@@ -485,7 +489,7 @@ class MudUi:
             for line in reversed(self.lines):
                 if budget <= 0:
                     break
-                value = line[-budget:]
+                value = _clip_ansi_line(line, budget)
                 retained.append(value)
                 budget -= len(value)
             self.lines = list(reversed(retained)) or [""]
