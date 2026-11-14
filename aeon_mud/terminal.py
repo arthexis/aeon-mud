@@ -161,7 +161,7 @@ def update_sgr_state(active: str, sequence: str) -> str:
         try:
             codes.append(int(raw_code or "0"))
         except ValueError:
-            return active + sequence
+            return active + sequence if len(active) + len(sequence) <= MAX_ACTIVE_SGR_CHARS else "\x1b[0m"
     if len(sequence) > MAX_ACTIVE_SGR_CHARS:
         return "\x1b[0m"
     if 0 not in codes:
