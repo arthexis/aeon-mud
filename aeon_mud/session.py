@@ -16,7 +16,7 @@ from .profiles import *
 from .security import *
 from .telnet import *
 from .transport import *
-from .terminal_text import TerminalStreamDecoder, sanitize_terminal_text, strip_ansi
+from .terminal_text import TerminalStreamDecoder, sanitize_terminal_text, strip_ansi, iter_outbound_buffers
 from .input import KeyReader, fast_page_scroll_amount
 from .terminal import MudUi
 from .commands import *
@@ -246,17 +246,19 @@ class SessionController:
         # initial Telnet/banner handshake is underway. Wait for first visible
         # server output; bounded fallback keeps silent servers usable.
         self.ready_for_commands.wait(timeout=2.0)
-        outbound_lines = [line] if secret else split_outbound_buffers(line)
-        for index, outbound_line in enumerate(outbound_lines):
+        outbound_lines = (line,) if secret else iter_outbound_buffers(line)
+        sent = 0
+        for outbound_line in outbound_lines:
+            if sent:
+                time.sleep(self.profile.paste_line_delay)
             data = (outbound_line + self.profile.newline).encode(self.profile.encoding, "replace")
             self.send_raw(data, expected_transport=expected_transport)
             self.transcript.write("send", outbound_line, secret=secret)
-            if index < len(outbound_lines) - 1:
-                time.sleep(self.profile.paste_line_delay)
+            sent += 1
         if remember and not secret:
             self.ui.remember(line)
-        if len(outbound_lines) > 1 and not secret:
-            self.ui.set_status(f"Sent {len(outbound_lines)} buffers; continuations used spoof")
+        if sent > 1 and not secret:
+            self.ui.set_status(f"Sent {sent} buffers; continuations used spoof")
 
     def send_character_login(self, expected_transport: Transport | None = None) -> None:
         if self.character_login is None:
@@ -631,10 +633,18 @@ def session_loop(
                 ui.insert_text(key.char)
     finally:
         stop.set()
-        controller.close()
-        if reader is not None:
-            reader.close()
-        ui.close()
+        try:
+            controller.close()
+        finally:
+            # Closing the transport unblocks the receiver on normal sockets.
+            # A bounded join avoids leaving shutdown to a daemon by default.
+            if receiver.is_alive():
+                receiver.join(timeout=2.0)
+            try:
+                if reader is not None:
+                    reader.close()
+            finally:
+                ui.close()
         if transcript.path:
             print(f"Log: {transcript.path}")
 
