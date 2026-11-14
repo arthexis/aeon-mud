@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import threading
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -161,8 +162,14 @@ def update_sgr_state(active: str, sequence: str) -> str:
             codes.append(int(raw_code or "0"))
         except ValueError:
             return active + sequence
+    if len(sequence) > MAX_ACTIVE_SGR_CHARS:
+        return "\x1b[0m"
     if 0 not in codes:
-        return active + sequence
+        if len(active) + len(sequence) <= MAX_ACTIVE_SGR_CHARS:
+            return active + sequence
+        # A hostile stream must not accumulate an ever-growing SGR carry.
+        # Reset at the next wrap boundary rather than replaying stale styles.
+        return "\x1b[0m" + sequence
     reset_index = max(index for index, code in enumerate(codes) if code == 0)
     return sequence if any(code != 0 for code in codes[reset_index + 1 :]) else ""
 
@@ -332,15 +339,27 @@ class MudUi:
             return describe_watch_rules(self.watch_rules)
 
     def append_output(self, text: str) -> None:
+        # Cap one received batch as well as retained lines. A long physical
+        # line must not bypass max_scrollback (which counts lines only).
+        text = text[-MAX_SCROLLBACK_TOTAL_CHARS:]
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         with self.lock:
             parts = text.split("\n")
             for index, part in enumerate(parts):
                 if index > 0:
                     self.lines.append("")
-                self.lines[-1] += part
+                self.lines[-1] = (self.lines[-1] + part)[-MAX_SCROLLBACK_LINE_CHARS:]
             if len(self.lines) > self.profile.max_scrollback:
-                self.lines = self.lines[-self.profile.max_scrollback :]
+                self.lines = self.lines[-self.profile.max_scrollback:]
+            retained = []
+            budget = MAX_SCROLLBACK_TOTAL_CHARS
+            for line in reversed(self.lines):
+                if budget <= 0:
+                    break
+                value = line[-budget:]
+                retained.append(value)
+                budget -= len(value)
+            self.lines = list(reversed(retained)) or [""]
             self._invalidate_display_cache()
             self.render()
 
@@ -352,16 +371,17 @@ class MudUi:
     def _display_lines(self, width: int) -> list[str]:
         if self._display_cache_width == width:
             return self._display_cache_rows
-        rows: list[str] = []
+        rows: deque[str] = deque(maxlen=MAX_DISPLAY_CACHE_ROWS)
         rules = list(self.watch_rules)
         for line in self.lines:
+            bounded = str(line)[-MAX_SCROLLBACK_LINE_CHARS:]
             try:
-                display_line = apply_watch_rules(line, rules)
+                display_line = apply_watch_rules(bounded, rules)
                 rows.extend(wrap_ansi(display_line, width))
             except Exception:
-                rows.extend(wrap_ansi(strip_ansi(str(line)), width))
+                rows.extend(wrap_ansi(strip_ansi(bounded), width))
         self._display_cache_width = width
-        self._display_cache_rows = rows or [""]
+        self._display_cache_rows = list(rows) or [""]
         return self._display_cache_rows
 
     @staticmethod
