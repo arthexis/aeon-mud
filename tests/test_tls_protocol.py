@@ -86,6 +86,47 @@ class TLSProtocolTests(unittest.TestCase):
                 session.session_loop(profile, args)
         password.assert_not_called()
 
+    def test_tls_certificate_failure_never_requests_plaintext_consent(self):
+        p = Profile("public", "mud.example.org", allow_plaintext=True)
+        raw = mock.Mock()
+        context = mock.Mock()
+        context.wrap_socket.side_effect = ssl.SSLCertVerificationError("untrusted")
+        authorize = mock.Mock(return_value=True)
+        with mock.patch.object(transport, "_open_tcp", return_value=raw) as connect, mock.patch.object(
+            transport.ssl, "create_default_context", return_value=context
+        ):
+            with self.assertRaises(ssl.SSLCertVerificationError):
+                transport.make_transport(p, authorize_plaintext=authorize)
+        authorize.assert_not_called()
+        connect.assert_called_once()
+
+    def test_authorized_fallback_reopens_socket_and_identifies_plaintext(self):
+        p = Profile("public", "mud.example.org", allow_plaintext=True)
+        first, second = mock.Mock(), mock.Mock()
+        context = mock.Mock()
+        error = ssl.SSLError("not TLS")
+        error.reason = "WRONG_VERSION_NUMBER"
+        context.wrap_socket.side_effect = error
+        authorize = mock.Mock(return_value=True)
+        with mock.patch.object(transport, "_open_tcp", side_effect=[first, second]) as connect, mock.patch.object(
+            transport.ssl, "create_default_context", return_value=context
+        ):
+            result = transport.make_transport(p, authorize_plaintext=authorize)
+        self.assertEqual(result.protocol, "plain")
+        self.assertIs(result.sock, second)
+        self.assertEqual(connect.call_count, 2)
+        first.close.assert_called_once()
+        authorize.assert_called_once()
+
+    def test_rejected_explicit_plaintext_never_opens_socket(self):
+        p = Profile("public", "mud.example.org", protocol="plain", allow_plaintext=True)
+        authorize = mock.Mock(return_value=False)
+        with mock.patch.object(transport, "_open_tcp") as connect:
+            with self.assertRaisesRegex(OSError, "not authorized"):
+                transport.make_transport(p, authorize_plaintext=authorize)
+        connect.assert_not_called()
+        authorize.assert_called_once()
+
     def test_protocol_validation(self):
         with self.assertRaisesRegex(ValueError, "protocol"):
             Profile("invalid", "example.org", protocol="starttls")
