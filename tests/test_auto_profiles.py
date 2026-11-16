@@ -65,10 +65,14 @@ class AutoProfileTests(unittest.TestCase):
                               allow_plaintext=True)
         args = self.args("--host", "example.test", "--port", "2069")
         transport = mock.MagicMock()
+        def establish(_profile, *, authorize_plaintext, **_kwargs):
+            if not authorize_plaintext():
+                raise OSError("Plaintext connection was not authorized")
+            return transport, telnet.TelnetCodec(), ""
         with (
             mock.patch.object(session, "is_private_target", return_value=False),
             mock.patch.object(session, "prompt_yes_no", return_value=True) as prompt,
-            mock.patch.object(session, "open_session_transport", return_value=(transport, telnet.TelnetCodec(), "")),
+            mock.patch.object(session, "open_session_transport", side_effect=establish),
             mock.patch.object(session, "run_sanity_checks"),
             mock.patch.object(session, "KeyReader", side_effect=KeyboardInterrupt),
             mock.patch.object(session, "MudUi"),
@@ -87,15 +91,19 @@ class AutoProfileTests(unittest.TestCase):
                               allow_plaintext=True,
                               approved_public_endpoint="example.test:2069")
         args = self.args("--host", "example.test", "--port", "2070")
+        def establish(_profile, *, authorize_plaintext, **_kwargs):
+            if not authorize_plaintext():
+                raise OSError("Plaintext connection was not authorized")
+            raise AssertionError("Rejected fallback should not open a plaintext connection")
         with (
             mock.patch.object(session, "is_private_target", return_value=False),
             mock.patch.object(session, "prompt_yes_no", return_value=False) as prompt,
-            mock.patch.object(session, "open_session_transport") as connect,
+            mock.patch.object(session, "open_session_transport", side_effect=establish) as connect,
         ):
-            with self.assertRaisesRegex(SystemExit, "aborted"):
+            with self.assertRaisesRegex(SystemExit, "not authorized"):
                 session.session_loop(profile, args)
             prompt.assert_called_once()
-            connect.assert_not_called()
+            connect.assert_called_once()
 
 
 if __name__ == "__main__":
