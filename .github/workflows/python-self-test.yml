@@ -81,6 +81,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Batch self-test failed" }
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\aeon-mud.ps1" self-test
           if ($LASTEXITCODE -ne 0) { throw "PowerShell self-test failed" }
+      - name: Verify batch Ctrl+C and exit-code preservation in isolated console
+        shell: powershell
+        run: |
+          python tests/windows_batch_ctrlc.py
+          if ($LASTEXITCODE -ne 0) { throw "Batch Ctrl+C test failed" }
+      - name: Verify batch forwards argparse failure code
+        shell: powershell
+        run: |
+          $result = & ".\aeon-mud.bat" connect --invalid-argument-xyz 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 2) { throw "Expected exit 2, got $LASTEXITCODE" }
+          if ($result -notmatch "unrecognized arguments") { throw "Missing argument error" }
       - name: Ensure obsolete launchers do not return
         shell: powershell
         run: |
