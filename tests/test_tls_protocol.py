@@ -1,5 +1,6 @@
 """Hermetic TLS protocol choice and downgrade-safety tests."""
 import ssl
+import threading
 import unittest
 from unittest import mock
 
@@ -126,6 +127,67 @@ class TLSProtocolTests(unittest.TestCase):
                 transport.make_transport(p, authorize_plaintext=authorize)
         connect.assert_not_called()
         authorize.assert_called_once()
+
+    def test_reconnect_public_other_port_rejects_plaintext_without_prompt(self):
+        from aeon_mud import session
+        p = Profile("public", "mud.example.org", port=6699,
+                    allow_plaintext=True, approved_public_endpoint="mud.example.org:2069",
+                    reconnect_initial_delay=0)
+        ui = mock.Mock()
+        controller = mock.Mock()
+        controller.profile = p
+        controller.ui = ui
+        controller.reconnect_lock = threading.Lock()
+        controller.private_peer_required = False
+        controller.character_login = None
+        controller.current_connection.return_value = None
+        stop = threading.Event()
+        callbacks = []
+
+        def connect(_profile, *, authorize_plaintext, **_kwargs):
+            callbacks.append(authorize_plaintext())
+            raise OSError("Plaintext connection was not authorized")
+
+        with mock.patch.object(session, "open_session_transport", side_effect=connect), mock.patch.object(
+            session, "sleep_until_stop", return_value=True
+        ), mock.patch.object(session, "append_client_event"), mock.patch.object(
+            session, "prompt_yes_no"
+        ) as prompt:
+            self.assertFalse(session.reconnect_session(stop, controller, mock.Mock(), "lost"))
+        self.assertEqual(callbacks, [False])
+        prompt.assert_not_called()
+        controller.install_connection.assert_not_called()
+
+    def test_reconnect_public_exact_approved_endpoint_allows_plaintext(self):
+        from aeon_mud import session, telnet
+        p = Profile("public", "mud.example.org", port=6699,
+                    allow_plaintext=True, approved_public_endpoint="mud.example.org:6699",
+                    reconnect_initial_delay=0)
+        ui = mock.Mock()
+        controller = mock.Mock()
+        controller.profile = p
+        controller.ui = ui
+        controller.reconnect_lock = threading.Lock()
+        controller.private_peer_required = False
+        controller.character_login = None
+        controller.current_connection.return_value = None
+        connected = mock.Mock()
+        stop = threading.Event()
+        callbacks = []
+
+        def connect(_profile, *, authorize_plaintext, **_kwargs):
+            callbacks.append(authorize_plaintext())
+            return connected, telnet.TelnetCodec(), ""
+
+        with mock.patch.object(session, "open_session_transport", side_effect=connect), mock.patch.object(
+            session, "run_sanity_checks"
+        ), mock.patch.object(session, "append_client_event"), mock.patch.object(
+            session, "prompt_yes_no"
+        ) as prompt:
+            self.assertTrue(session.reconnect_session(stop, controller, mock.Mock(), "lost"))
+        self.assertEqual(callbacks, [True])
+        prompt.assert_not_called()
+        controller.install_connection.assert_called_once()
 
     def test_protocol_validation(self):
         with self.assertRaisesRegex(ValueError, "protocol"):
