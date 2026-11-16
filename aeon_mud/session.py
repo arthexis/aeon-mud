@@ -562,19 +562,7 @@ def session_loop(
     if character is not None:
         character = validate_character_name(character)
     set_connection_tab_title(profile, character)
-    if character is not None:
-        key = character_secret_key(profile, character)
-        if Dpapi.available():
-            character_password = SecretStore().get_password(key)
-        if character_password is None:
-            character_password = getpass.getpass(f"Password for {character} on {profile.host}: ")
-        if not character_password or "\r" in character_password or "\n" in character_password:
-            raise SystemExit("Password must not be empty or contain a newline")
     password: str | None = None
-    if profile.auto_login and character is None:
-        password = SecretStore().get_password(profile.label())
-        if profile.username and password is None:
-            password = getpass.getpass(f"Password for {profile.label()} auto-login: ")
 
     try:
         transport, codec, initial_banner = open_session_transport(
@@ -584,7 +572,21 @@ def session_loop(
     except OSError as exc:
         raise SystemExit(f"Could not connect to {connection_target_label(profile)}: {exc}") from exc
     try:
+        # Never ask for, store, or send credentials before the connection has
+        # completed TLS negotiation (or explicitly authorized plaintext).
         run_sanity_checks(profile, initial_banner, args.accept_host_change, args.yes)
+        if character is not None:
+            key = character_secret_key(profile, character)
+            if Dpapi.available():
+                character_password = SecretStore().get_password(key)
+            if character_password is None:
+                character_password = getpass.getpass(f"Password for {character} on {profile.host}: ")
+            if not character_password or "\r" in character_password or "\n" in character_password:
+                raise SystemExit("Password must not be empty or contain a newline")
+        if profile.auto_login and character is None:
+            password = SecretStore().get_password(profile.label())
+            if profile.username and password is None:
+                password = getpass.getpass(f"Password for {profile.label()} auto-login: ")
         if public_approval_given:
             profile.approved_public_endpoint = endpoint
         if character is not None:
