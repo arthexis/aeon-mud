@@ -75,6 +75,8 @@ def apply_connect_overrides(profile: Profile, args: argparse.Namespace) -> Profi
             )
         except HostPortError as exc:
             raise SystemExit(str(exc)) from exc
+    if getattr(args, "protocol", None) is not None:
+        profile.protocol = args.protocol
     if getattr(args, "allow_plaintext", False):
         profile.allow_plaintext = True
     if getattr(args, "allow_public", False):
@@ -156,7 +158,7 @@ def command_profile_list(_args: argparse.Namespace) -> None:
         profile = store.get(name)
         wrapper = "proxy" if profile.proxy_command else ("socks5" if profile.socks5_host else "direct")
         private = "private-only" if profile.require_private_host else "public-allowed"
-        print(f"{name}\t{profile.host}:{profile.port}\t{wrapper}\t{private}\tlog:{profile.transcript}")
+        print(f"{name}\t{profile.host}:{profile.port}\t{wrapper}\t{private}\tprotocol:{profile.protocol}\tlog:{profile.transcript}")
 
 
 def command_profile_show(args: argparse.Namespace) -> None:
@@ -170,7 +172,7 @@ def command_profile_remove(args: argparse.Namespace) -> None:
 
 
 def command_profile_add(args: argparse.Namespace) -> None:
-    if not args.allow_plaintext:
+    if args.protocol == "plain" and not args.allow_plaintext:
         raise SystemExit("Use --allow-plaintext to acknowledge that this profile uses insecure Telnet.")
     try:
         host, port = normalize_host_port(args.host, args.port, explicit_port=args.port is not None)
@@ -180,7 +182,8 @@ def command_profile_add(args: argparse.Namespace) -> None:
         name=args.name,
         host=host,
         port=port,
-        allow_plaintext=True,
+        allow_plaintext=args.allow_plaintext,
+        protocol=args.protocol,
         require_private_host=not args.allow_public,
         expected_banner=args.expected_banner or "",
         username=args.username or "",
@@ -585,6 +588,7 @@ def build_parser() -> argparse.ArgumentParser:
     connect.add_argument("--host", help="direct host when no profile is supplied")
     connect.add_argument("--port", type=int, default=None)
     connect.add_argument("--allow-plaintext", action="store_true")
+    connect.add_argument("--protocol", choices=["plain", "tls", "auto"], help="transport protocol (auto tries TLS first)")
     connect.add_argument("--allow-public", action="store_true", help="allow plaintext target outside private/link-local ranges")
     connect.add_argument("--expected-banner")
     connect.add_argument("--username")
@@ -624,6 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
     profile_add.add_argument("--host", required=True)
     profile_add.add_argument("--port", type=int, default=None)
     profile_add.add_argument("--allow-plaintext", action="store_true")
+    profile_add.add_argument("--protocol", choices=["plain", "tls", "auto"], default="plain")
     profile_add.add_argument("--allow-public", action="store_true")
     profile_add.add_argument("--expected-banner")
     profile_add.add_argument("--username")

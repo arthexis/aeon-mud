@@ -363,3 +363,27 @@ python -m py_compile .\aeon_mud_client.py
 python -m json.tool .\profiles.example.json
 git diff --check
 ```
+
+
+### TLS and protocol detection (Python client)
+
+Use `--protocol tls` for certificate-verified TLS, or `--protocol auto` to try
+TLS first. For example:
+
+```bash
+./aeon-mud connect --host mud.example.org --port 4001 --protocol auto
+./aeon-mud connect --host 127.0.0.1 --port 4000 --protocol auto --allow-plaintext
+```
+
+`auto` retries on a **fresh connection** as plaintext only for recognizable
+non-TLS framing, and only with `--allow-plaintext` (or saved profile consent).
+It never downgrades certificate/hostname verification errors or TLS alerts.
+A TLS probe may disrupt legacy Telnet servers, and network attackers may induce
+non-TLS framing when plaintext fallback is authorized. Use `tls` without
+plaintext permission for security-sensitive servers. There is no reliable
+passive protocol auto-detection for servers that wait for clients to speak.
+
+Profiles can save `protocol` as `plain` (legacy default), `tls`, or `auto`.
+TLS verification uses system trust roots and the destination hostname; no
+insecure-certificate bypass is provided. TLS over SOCKS5 is supported; TLS over
+`proxy_command` is not. This change does not extend the Rust prototype.

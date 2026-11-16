@@ -12,6 +12,7 @@ class Profile:
     host: str
     port: int = DEFAULT_PORT
     allow_plaintext: bool = False
+    protocol: str = "plain"  # plain (legacy), tls, or auto (TLS-first)
     require_private_host: bool = True
     approved_public_endpoint: str = ""
     expected_banner: str = ""
@@ -39,6 +40,8 @@ class Profile:
     max_scrollback: int = 5000
 
     def __post_init__(self) -> None:
+        if self.protocol not in ("plain", "tls", "auto"):
+            raise ValueError("protocol must be plain, tls, or auto")
         for name, maximum in (("max_history", MAX_HISTORY_ENTRIES), ("max_scrollback", MAX_SCROLLBACK_LINES)):
             value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= maximum:
