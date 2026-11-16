@@ -6,6 +6,7 @@ import socket
 import ssl
 import struct
 import subprocess
+from typing import Callable
 from .profiles import Profile
 
 class Transport:
@@ -200,7 +201,8 @@ def _not_tls(exc: BaseException) -> bool:
     return isinstance(exc, ssl.SSLError) and getattr(exc, "reason", None) in _NON_TLS_REASONS
 
 
-def make_transport(profile: Profile, *, require_private_peer: bool = False) -> Transport:
+def make_transport(profile: Profile, *, require_private_peer: bool = False,
+                   authorize_plaintext: Callable[[], bool] | None = None) -> Transport:
     if profile.proxy_command:
         # A process-backed stream cannot be safely probed and rewound. Preserve
         # existing SSH-wrapped plaintext profiles only with explicit consent.
@@ -208,6 +210,8 @@ def make_transport(profile: Profile, *, require_private_peer: bool = False) -> T
             raise OSError("TLS is not supported with proxy_command; use SOCKS5 or direct TCP")
         if not profile.allow_plaintext:
             raise OSError("proxy_command requires --allow-plaintext (no TLS auto-detection)")
+        if authorize_plaintext is not None and not authorize_plaintext():
+            raise OSError("Plaintext connection was not authorized")
         return ProcessTransport(profile.proxy_command)
 
     # A failed probe is never reused for Telnet. A fresh TCP/SOCKS5 connection
@@ -216,6 +220,10 @@ def make_transport(profile: Profile, *, require_private_peer: bool = False) -> T
         ("tls",) if profile.protocol in ("auto", "tls") else ("plain",)
     )
     for mode in modes:
+        # TLS validation must happen before even asking about plaintext.
+        # This guard is also used on reconnect; no bypass of endpoint consent.
+        if mode == "plain" and authorize_plaintext is not None and not authorize_plaintext():
+            raise OSError("Plaintext connection was not authorized")
         sock = _open_tcp(profile)
         try:
             if require_private_peer and not is_private_address(sock.getpeername()[0]):
@@ -225,7 +233,9 @@ def make_transport(profile: Profile, *, require_private_peer: bool = False) -> T
                 sock.settimeout(profile.connect_timeout)
                 sock = context.wrap_socket(sock, server_hostname=profile.host)
             sock.settimeout(None)
-            return SocketTransport(sock)
+            result = SocketTransport(sock)
+            result.protocol = mode
+            return result
         except BaseException as exc:
             sock.close()
             if mode != "tls" or profile.protocol != "auto" or not profile.allow_plaintext or not _not_tls(exc):

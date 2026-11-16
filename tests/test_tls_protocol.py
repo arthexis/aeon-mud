@@ -1,5 +1,6 @@
 """Hermetic TLS protocol choice and downgrade-safety tests."""
 import ssl
+import threading
 import unittest
 from unittest import mock
 
@@ -40,6 +41,153 @@ class TLSProtocolTests(unittest.TestCase):
             with self.assertRaises(ssl.SSLError):
                 transport.make_transport(p)
         connect.assert_called_once()
+
+    def test_tls_success_never_prompts_for_plaintext(self):
+        p = Profile("public", "mud.example.org", allow_plaintext=True)
+        raw = mock.Mock()
+        context = mock.Mock()
+        context.wrap_socket.return_value = mock.Mock()
+        authorize = mock.Mock(return_value=False)
+        with mock.patch.object(transport, "_open_tcp", return_value=raw), mock.patch.object(
+            transport.ssl, "create_default_context", return_value=context
+        ):
+            connection = transport.make_transport(p, authorize_plaintext=authorize)
+        self.assertEqual(connection.protocol, "tls")
+        authorize.assert_not_called()
+
+    def test_auto_fallback_requests_consent_only_after_failed_tls(self):
+        p = Profile("public", "mud.example.org", allow_plaintext=True)
+        raw = mock.Mock()
+        context = mock.Mock()
+        error = ssl.SSLError("wrong version")
+        error.reason = "WRONG_VERSION_NUMBER"
+        context.wrap_socket.side_effect = error
+        authorize = mock.Mock(return_value=False)
+        with mock.patch.object(transport, "_open_tcp", return_value=raw) as connect, mock.patch.object(
+            transport.ssl, "create_default_context", return_value=context
+        ):
+            with self.assertRaisesRegex(OSError, "not authorized"):
+                transport.make_transport(p, authorize_plaintext=authorize)
+        authorize.assert_called_once()
+        connect.assert_called_once()
+
+    def test_login_credentials_not_requested_before_transport(self):
+        from aeon_mud import session
+        args = cli.build_parser().parse_args([
+            "connect", "--host", "127.0.0.1", "--port", "4000",
+            "--login", "test_character",
+        ])
+        profile = Profile("test", "127.0.0.1")
+        with mock.patch.object(session, "set_connection_tab_title"), mock.patch.object(
+            session, "is_private_target", return_value=True
+        ), mock.patch.object(
+            session, "open_session_transport", side_effect=OSError("TLS unavailable")
+        ), mock.patch.object(session.getpass, "getpass") as password:
+            with self.assertRaisesRegex(SystemExit, "TLS unavailable"):
+                session.session_loop(profile, args)
+        password.assert_not_called()
+
+    def test_tls_certificate_failure_never_requests_plaintext_consent(self):
+        p = Profile("public", "mud.example.org", allow_plaintext=True)
+        raw = mock.Mock()
+        context = mock.Mock()
+        context.wrap_socket.side_effect = ssl.SSLCertVerificationError("untrusted")
+        authorize = mock.Mock(return_value=True)
+        with mock.patch.object(transport, "_open_tcp", return_value=raw) as connect, mock.patch.object(
+            transport.ssl, "create_default_context", return_value=context
+        ):
+            with self.assertRaises(ssl.SSLCertVerificationError):
+                transport.make_transport(p, authorize_plaintext=authorize)
+        authorize.assert_not_called()
+        connect.assert_called_once()
+
+    def test_authorized_fallback_reopens_socket_and_identifies_plaintext(self):
+        p = Profile("public", "mud.example.org", allow_plaintext=True)
+        first, second = mock.Mock(), mock.Mock()
+        context = mock.Mock()
+        error = ssl.SSLError("not TLS")
+        error.reason = "WRONG_VERSION_NUMBER"
+        context.wrap_socket.side_effect = error
+        authorize = mock.Mock(return_value=True)
+        with mock.patch.object(transport, "_open_tcp", side_effect=[first, second]) as connect, mock.patch.object(
+            transport.ssl, "create_default_context", return_value=context
+        ):
+            result = transport.make_transport(p, authorize_plaintext=authorize)
+        self.assertEqual(result.protocol, "plain")
+        self.assertIs(result.sock, second)
+        self.assertEqual(connect.call_count, 2)
+        first.close.assert_called_once()
+        authorize.assert_called_once()
+
+    def test_rejected_explicit_plaintext_never_opens_socket(self):
+        p = Profile("public", "mud.example.org", protocol="plain", allow_plaintext=True)
+        authorize = mock.Mock(return_value=False)
+        with mock.patch.object(transport, "_open_tcp") as connect:
+            with self.assertRaisesRegex(OSError, "not authorized"):
+                transport.make_transport(p, authorize_plaintext=authorize)
+        connect.assert_not_called()
+        authorize.assert_called_once()
+
+    def test_reconnect_public_other_port_rejects_plaintext_without_prompt(self):
+        from aeon_mud import session
+        p = Profile("public", "mud.example.org", port=6699,
+                    allow_plaintext=True, approved_public_endpoint="mud.example.org:2069",
+                    reconnect_initial_delay=0)
+        ui = mock.Mock()
+        controller = mock.Mock()
+        controller.profile = p
+        controller.ui = ui
+        controller.reconnect_lock = threading.Lock()
+        controller.private_peer_required = False
+        controller.character_login = None
+        controller.current_connection.return_value = None
+        stop = threading.Event()
+        callbacks = []
+
+        def connect(_profile, *, authorize_plaintext, **_kwargs):
+            callbacks.append(authorize_plaintext())
+            raise OSError("Plaintext connection was not authorized")
+
+        with mock.patch.object(session, "open_session_transport", side_effect=connect), mock.patch.object(
+            session, "sleep_until_stop", return_value=True
+        ), mock.patch.object(session, "append_client_event"), mock.patch.object(
+            session, "prompt_yes_no"
+        ) as prompt:
+            self.assertFalse(session.reconnect_session(stop, controller, mock.Mock(), "lost"))
+        self.assertEqual(callbacks, [False])
+        prompt.assert_not_called()
+        controller.install_connection.assert_not_called()
+
+    def test_reconnect_public_exact_approved_endpoint_allows_plaintext(self):
+        from aeon_mud import session, telnet
+        p = Profile("public", "mud.example.org", port=6699,
+                    allow_plaintext=True, approved_public_endpoint="mud.example.org:6699",
+                    reconnect_initial_delay=0)
+        ui = mock.Mock()
+        controller = mock.Mock()
+        controller.profile = p
+        controller.ui = ui
+        controller.reconnect_lock = threading.Lock()
+        controller.private_peer_required = False
+        controller.character_login = None
+        controller.current_connection.return_value = None
+        connected = mock.Mock()
+        stop = threading.Event()
+        callbacks = []
+
+        def connect(_profile, *, authorize_plaintext, **_kwargs):
+            callbacks.append(authorize_plaintext())
+            return connected, telnet.TelnetCodec(), ""
+
+        with mock.patch.object(session, "open_session_transport", side_effect=connect), mock.patch.object(
+            session, "run_sanity_checks"
+        ), mock.patch.object(session, "append_client_event"), mock.patch.object(
+            session, "prompt_yes_no"
+        ) as prompt:
+            self.assertTrue(session.reconnect_session(stop, controller, mock.Mock(), "lost"))
+        self.assertEqual(callbacks, [True])
+        prompt.assert_not_called()
+        controller.install_connection.assert_called_once()
 
     def test_protocol_validation(self):
         with self.assertRaisesRegex(ValueError, "protocol"):
