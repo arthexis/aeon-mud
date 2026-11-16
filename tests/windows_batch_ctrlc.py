@@ -65,7 +65,17 @@ def main():
             if proc.poll() is None:
                 proc.kill()
                 proc.communicate(timeout=5)
-    print("PASS: no second CMD prompt; exit code preserved")
+    # A failing CLI invocation must retain argparse's exit code. Avoid
+    # PowerShell's NativeCommandError behavior on redirected native stderr.
+    failure = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(source), "connect", "--invalid-argument-xyz"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15,
+        check=False,
+    )
+    observed = failure.stdout.decode("utf-8", "replace")
+    if failure.returncode != 2 or "unrecognized arguments" not in observed:
+        raise AssertionError(f"CLI failure propagation: rc={failure.returncode}, output={observed[-600:]!r}")
+    print("PASS: no second CMD prompt; exit codes 130 and 2 preserved")
     return 0
 
 
