@@ -73,8 +73,12 @@ def pre_read_banner(transport: Transport, codec: TelnetCodec, timeout: float) ->
 
 def open_session_transport(
     profile: Profile, *, require_private_peer: bool = False,
+    authorize_plaintext: Callable[[], bool] | None = None,
 ) -> tuple[Transport, TelnetCodec, str]:
-    transport = make_transport(profile, require_private_peer=require_private_peer)
+    options = {"require_private_peer": require_private_peer}
+    if authorize_plaintext is not None:
+        options["authorize_plaintext"] = authorize_plaintext
+    transport = make_transport(profile, **options)
     codec = TelnetCodec(profile.terminal_type)
     try:
         width, height = shutil.get_terminal_size((100, 30))
@@ -399,7 +403,15 @@ def reconnect_session(
             transport = None
             try:
                 transport, codec, initial_banner = open_session_transport(
-                    profile, require_private_peer=controller.private_peer_required
+                    profile, require_private_peer=controller.private_peer_required,
+                    authorize_plaintext=lambda: (
+                        profile.allow_plaintext and (
+                            not profile.require_private_host
+                            or controller.private_peer_required
+                            or bool(profile.socks5_host or profile.proxy_command)
+                            or profile.approved_public_endpoint == f"{profile.host.rstrip('.').casefold()}:{profile.port}"
+                        )
+                    ),
                 )
                 run_sanity_checks(profile, initial_banner, False, False, interactive=False)
             except Exception as exc:
@@ -523,20 +535,27 @@ def session_loop(
         raise SystemExit("Refusing plaintext Telnet until --allow-plaintext is set on the profile or command.")
     private_peer_required = False
     public_approval_given = False
-    if profile.allow_plaintext and profile.protocol != "tls" and profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
+    endpoint = f"{profile.host.rstrip('.').casefold()}:{profile.port}"
+    if profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
         private_peer_required = is_private_target(profile.host)
-        if not private_peer_required:
-            # Approval is for this exact host and TCP port, not the domain suffix.
-            endpoint = f"{profile.host.rstrip('.').casefold()}:{profile.port}"
-            if profile.approved_public_endpoint != endpoint:
-                ok = prompt_yes_no(
-                    f"{profile.host} does not resolve only to private/link-local addresses. Continue with plaintext Telnet?",
-                    default=False,
-                    assume_yes=args.yes,
-                )
-                if not ok:
-                    raise SystemExit("Connection aborted by private-host policy")
-                public_approval_given = True
+
+    def authorize_plaintext() -> bool:
+        nonlocal public_approval_given
+        if not profile.allow_plaintext:
+            return False
+        if (not profile.require_private_host or private_peer_required
+                or profile.proxy_command or profile.socks5_host):
+            return True
+        if profile.approved_public_endpoint == endpoint or public_approval_given:
+            return True
+        ok = prompt_yes_no(
+            f"{profile.host} is public. TLS was not selected; allow insecure plaintext Telnet?",
+            default=False,
+            assume_yes=args.yes,
+        )
+        if ok:
+            public_approval_given = True
+        return ok
 
     character = getattr(args, "login", None)
     character_password: str | None = None
@@ -559,14 +578,15 @@ def session_loop(
 
     try:
         transport, codec, initial_banner = open_session_transport(
-            profile, require_private_peer=private_peer_required
+            profile, require_private_peer=private_peer_required,
+            authorize_plaintext=authorize_plaintext,
         )
     except OSError as exc:
         raise SystemExit(f"Could not connect to {connection_target_label(profile)}: {exc}") from exc
     try:
         run_sanity_checks(profile, initial_banner, args.accept_host_change, args.yes)
         if public_approval_given:
-            profile.approved_public_endpoint = f"{profile.host.rstrip('.').casefold()}:{profile.port}"
+            profile.approved_public_endpoint = endpoint
         if character is not None:
             if character not in profile.characters:
                 profile.characters.append(character)
@@ -604,6 +624,9 @@ def session_loop(
     try:
         reader = KeyReader()
         ui.start()
+        if isinstance(transport, SocketTransport):
+            ui.set_status("Connected via verified TLS" if getattr(transport, "protocol", None) == "tls"
+                          else "Connected via plaintext Telnet")
         if initial_banner:
             controller.mark_server_output()
             transcript.write("recv", initial_banner)
