@@ -519,7 +519,7 @@ def session_loop(
     profile: Profile, args: argparse.Namespace,
     on_connected: Callable[[Profile], None] | None = None,
 ) -> None:
-    if profile.protocol == "plain" and not profile.allow_plaintext:
+    if (profile.protocol == "plain" or profile.proxy_command) and not profile.allow_plaintext:
         raise SystemExit("Refusing plaintext Telnet until --allow-plaintext is set on the profile or command.")
     private_peer_required = False
     public_approval_given = False

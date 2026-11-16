@@ -202,8 +202,12 @@ def _not_tls(exc: BaseException) -> bool:
 
 def make_transport(profile: Profile, *, require_private_peer: bool = False) -> Transport:
     if profile.proxy_command:
-        if profile.protocol != "plain":
-            raise ValueError("TLS detection is not supported with proxy_command; use SOCKS5 or direct TCP")
+        # A process-backed stream cannot be safely probed and rewound. Preserve
+        # existing SSH-wrapped plaintext profiles only with explicit consent.
+        if profile.protocol == "tls":
+            raise OSError("TLS is not supported with proxy_command; use SOCKS5 or direct TCP")
+        if not profile.allow_plaintext:
+            raise OSError("proxy_command requires --allow-plaintext (no TLS auto-detection)")
         return ProcessTransport(profile.proxy_command)
 
     # A failed probe is never reused for Telnet. A fresh TCP/SOCKS5 connection

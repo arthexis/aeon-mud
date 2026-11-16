@@ -12,7 +12,7 @@ class Profile:
     host: str
     port: int = DEFAULT_PORT
     allow_plaintext: bool = False
-    protocol: str = "plain"  # plain (legacy), tls, or auto (TLS-first)
+    protocol: str = "auto"  # TLS-first; plaintext fallback requires consent
     require_private_host: bool = True
     approved_public_endpoint: str = ""
     expected_banner: str = ""

@@ -4,10 +4,43 @@ import unittest
 from unittest import mock
 
 from aeon_mud.profiles import Profile
-from aeon_mud import transport
+from aeon_mud import cli, transport
 
 
 class TLSProtocolTests(unittest.TestCase):
+    def test_auto_is_default_for_new_and_legacy_saved_profiles(self):
+        self.assertEqual(Profile("new", "mud.example.org").protocol, "auto")
+        legacy = Profile.from_dict("legacy", {"host": "mud.example.org", "allow_plaintext": True})
+        self.assertEqual(legacy.protocol, "auto")
+        self.assertTrue(legacy.allow_plaintext)
+        self.assertEqual(legacy.to_stored_dict()["protocol"], "auto")
+
+    def test_cli_defaults_and_explicit_overrides(self):
+        parser = cli.build_parser()
+        connect = parser.parse_args(["connect", "--host", "mud.example.org"])
+        self.assertIsNone(connect.protocol)
+        profile = cli.apply_connect_overrides(Profile("new", "mud.example.org"), connect)
+        self.assertEqual(profile.protocol, "auto")
+        add = parser.parse_args(["profile", "add", "test", "--host", "mud.example.org"])
+        self.assertEqual(add.protocol, "auto")
+        explicit = parser.parse_args(["connect", "--host", "mud.example.org", "--protocol", "plain"])
+        self.assertEqual(cli.apply_connect_overrides(Profile("new", "mud.example.org"), explicit).protocol, "plain")
+
+    def test_auto_default_requires_consent_for_plaintext_retry(self):
+        p = Profile("new", "mud.example.org")
+        self.assertFalse(p.allow_plaintext)
+        raw = mock.Mock()
+        context = mock.Mock()
+        error = ssl.SSLError("wrong version")
+        error.reason = "WRONG_VERSION_NUMBER"
+        context.wrap_socket.side_effect = error
+        with mock.patch.object(transport, "_open_tcp", return_value=raw) as connect, mock.patch.object(
+            transport.ssl, "create_default_context", return_value=context
+        ):
+            with self.assertRaises(ssl.SSLError):
+                transport.make_transport(p)
+        connect.assert_called_once()
+
     def test_protocol_validation(self):
         with self.assertRaisesRegex(ValueError, "protocol"):
             Profile("invalid", "example.org", protocol="starttls")
@@ -67,8 +100,24 @@ class TLSProtocolTests(unittest.TestCase):
 
     def test_proxy_command_tls_is_rejected(self):
         p = Profile("tls", "mud.example.org", protocol="tls", proxy_command=["ssh", "-W", "target", "host"])
-        with self.assertRaisesRegex(ValueError, "proxy_command"):
+        with self.assertRaisesRegex(OSError, "proxy_command"):
             transport.make_transport(p)
+
+    def test_legacy_proxy_command_keeps_authorized_plaintext(self):
+        p = Profile.from_dict("legacy", {
+            "host": "mud.example.org", "allow_plaintext": True,
+            "proxy_command": ["ssh", "-W", "target", "host"],
+        })
+        with mock.patch.object(transport, "ProcessTransport") as process:
+            self.assertIs(transport.make_transport(p), process.return_value)
+        process.assert_called_once_with(p.proxy_command)
+
+    def test_proxy_command_without_plaintext_permission_fails_closed(self):
+        p = Profile("blocked", "mud.example.org", proxy_command=["ssh", "-W", "target", "host"])
+        with mock.patch.object(transport, "ProcessTransport") as process:
+            with self.assertRaisesRegex(OSError, "allow-plaintext"):
+                transport.make_transport(p)
+        process.assert_not_called()
 
 
 if __name__ == "__main__":
