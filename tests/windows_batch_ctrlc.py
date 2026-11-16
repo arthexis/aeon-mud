@@ -72,7 +72,8 @@ def main():
     # PowerShell's NativeCommandError behavior on redirected native stderr.
     failure = subprocess.run(
         ["cmd.exe", "/d", "/c", str(source), "connect", "--invalid-argument-xyz"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, timeout=15,
         check=False,
     )
     observed = failure.stdout.decode("utf-8", "replace")
