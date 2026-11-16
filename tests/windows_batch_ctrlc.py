@@ -26,10 +26,13 @@ def main():
             '    print("PYTHON_CAUGHT_CTRL_C", flush=True)\n'
             '    sys.exit(130)\n', encoding="utf-8",
         )
+        # Do not redirect standard input: an interactive CMD confirmation
+        # must have NO automatic "n" response to conceal a pending prompt.
+        # Redirect only the program's output via CMD, keeping its own
+        # console stdin attached to the newly allocated console.
         proc = subprocess.Popen(
-            ["cmd.exe", "/d", "/c", str(root / "aeon-mud.bat")],
-            cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NEW_CONSOLE,
+            ["cmd.exe", "/d", "/c", "aeon-mud.bat > output.log 2>&1"],
+            cwd=root, creationflags=subprocess.CREATE_NEW_CONSOLE,
         )
         k = ctypes.WinDLL("kernel32", use_last_error=True)
         k.AttachConsole.argtypes = [ctypes.c_uint]
@@ -55,8 +58,8 @@ def main():
                 time.sleep(0.3)
             finally:
                 k.FreeConsole()
-            output, _ = proc.communicate(input=b"n\n", timeout=12)
-            observed = output.decode("utf-8", "replace")
+            proc.wait(timeout=12)
+            observed = (root / "output.log").read_text(encoding="utf-8", errors="replace")
             print("Exit:", proc.returncode, "Output:", repr(observed[-1200:]))
             assert "PYTHON_CAUGHT_CTRL_C" in observed, "Ctrl+C did not reach Python"
             assert "Terminate batch job" not in observed, "CMD requested a second confirmation"
@@ -64,7 +67,7 @@ def main():
         finally:
             if proc.poll() is None:
                 proc.kill()
-                proc.communicate(timeout=5)
+                proc.wait(timeout=5)
     # A failing CLI invocation must retain argparse's exit code. Avoid
     # PowerShell's NativeCommandError behavior on redirected native stderr.
     failure = subprocess.run(
