@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import ssl
 import struct
 import subprocess
 from .profiles import Profile
@@ -179,22 +180,57 @@ def is_private_address(address: str) -> bool:
     return ip.is_private or ip.is_loopback or ip.is_link_local
 
 
+def _open_tcp(profile: Profile) -> socket.socket:
+    if profile.socks5_host:
+        return connect_socks5(profile)
+    sock = socket.create_connection((profile.host, profile.port), timeout=profile.connect_timeout)
+    configure_tcp_socket(sock, profile.keepalive_interval)
+    return sock
+
+
+# Only classify unmistakable non-TLS framing as eligible for an explicitly
+# authorized plaintext retry. Certificate, hostname, and TLS alert errors are
+# never downgraded.
+_NON_TLS_REASONS = frozenset({
+    "WRONG_VERSION_NUMBER", "UNKNOWN_PROTOCOL", "HTTP_REQUEST",
+})
+
+
+def _not_tls(exc: BaseException) -> bool:
+    return isinstance(exc, ssl.SSLError) and getattr(exc, "reason", None) in _NON_TLS_REASONS
+
+
 def make_transport(profile: Profile, *, require_private_peer: bool = False) -> Transport:
     if profile.proxy_command:
+        # A process-backed stream cannot be safely probed and rewound. Preserve
+        # existing SSH-wrapped plaintext profiles only with explicit consent.
+        if profile.protocol == "tls":
+            raise OSError("TLS is not supported with proxy_command; use SOCKS5 or direct TCP")
+        if not profile.allow_plaintext:
+            raise OSError("proxy_command requires --allow-plaintext (no TLS auto-detection)")
         return ProcessTransport(profile.proxy_command)
-    if profile.socks5_host:
-        sock = connect_socks5(profile)
-    else:
-        sock = socket.create_connection((profile.host, profile.port), timeout=profile.connect_timeout)
-        configure_tcp_socket(sock, profile.keepalive_interval)
-    try:
-        if require_private_peer and not is_private_address(sock.getpeername()[0]):
-            raise OSError("Connected peer violates the private-address policy")
-        sock.settimeout(None)
-        return SocketTransport(sock)
-    except BaseException:
-        sock.close()
-        raise
+
+    # A failed probe is never reused for Telnet. A fresh TCP/SOCKS5 connection
+    # prevents TLS handshake bytes from entering the application session.
+    modes = ("tls", "plain") if profile.protocol == "auto" and profile.allow_plaintext else (
+        ("tls",) if profile.protocol in ("auto", "tls") else ("plain",)
+    )
+    for mode in modes:
+        sock = _open_tcp(profile)
+        try:
+            if require_private_peer and not is_private_address(sock.getpeername()[0]):
+                raise OSError("Connected peer violates the private-address policy")
+            if mode == "tls":
+                context = ssl.create_default_context()
+                sock.settimeout(profile.connect_timeout)
+                sock = context.wrap_socket(sock, server_hostname=profile.host)
+            sock.settimeout(None)
+            return SocketTransport(sock)
+        except BaseException as exc:
+            sock.close()
+            if mode != "tls" or profile.protocol != "auto" or not profile.allow_plaintext or not _not_tls(exc):
+                raise
+    raise OSError("No supported connection protocol")
 
 
 def connection_target_label(profile: Profile) -> str:

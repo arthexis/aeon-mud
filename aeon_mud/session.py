@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import select
+import ssl
 import shutil
 import sys
 import threading
@@ -54,7 +55,10 @@ def pre_read_banner(transport: Transport, codec: TelnetCodec, timeout: float) ->
             readable, _, _ = select.select([sock], [], [], min(0.1, remaining))
             if not readable:
                 continue
-            chunk = sock.recv(4096)
+            try:
+                chunk = sock.recv(4096)
+            except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                continue
             if not chunk:
                 break
             output, response = codec.feed(chunk)
@@ -515,11 +519,11 @@ def session_loop(
     profile: Profile, args: argparse.Namespace,
     on_connected: Callable[[Profile], None] | None = None,
 ) -> None:
-    if not profile.allow_plaintext:
+    if (profile.protocol == "plain" or profile.proxy_command) and not profile.allow_plaintext:
         raise SystemExit("Refusing plaintext Telnet until --allow-plaintext is set on the profile or command.")
     private_peer_required = False
     public_approval_given = False
-    if profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
+    if profile.allow_plaintext and profile.protocol != "tls" and profile.require_private_host and not profile.proxy_command and not profile.socks5_host:
         private_peer_required = is_private_target(profile.host)
         if not private_peer_required:
             # Approval is for this exact host and TCP port, not the domain suffix.

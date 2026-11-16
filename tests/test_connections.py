@@ -81,7 +81,7 @@ class ConnectionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, LocalServer(respond, count=2) as srv:
             p = profiles.Profile(name="integration", host="127.0.0.1", port=srv.port,
-                            allow_plaintext=True, expected_banner="login",
+                            allow_plaintext=True, protocol="plain", expected_banner="login",
                             sanity_timeout=0.05, reconnect_initial_delay=0.0)
             with mock.patch.object(session, "known_hosts_path", return_value=Path(tmp) / "hosts.json"):
                 transport, codec, banner = session.open_session_transport(p, require_private_peer=True)
