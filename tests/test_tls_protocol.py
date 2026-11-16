@@ -70,6 +70,22 @@ class TLSProtocolTests(unittest.TestCase):
         authorize.assert_called_once()
         connect.assert_called_once()
 
+    def test_login_credentials_not_requested_before_transport(self):
+        from aeon_mud import session
+        args = cli.build_parser().parse_args([
+            "connect", "--host", "127.0.0.1", "--port", "4000",
+            "--login", "test_character",
+        ])
+        profile = Profile("test", "127.0.0.1")
+        with mock.patch.object(session, "set_connection_tab_title"), mock.patch.object(
+            session, "is_private_target", return_value=True
+        ), mock.patch.object(
+            session, "open_session_transport", side_effect=OSError("TLS unavailable")
+        ), mock.patch.object(session.getpass, "getpass") as password:
+            with self.assertRaisesRegex(SystemExit, "TLS unavailable"):
+                session.session_loop(profile, args)
+        password.assert_not_called()
+
     def test_protocol_validation(self):
         with self.assertRaisesRegex(ValueError, "protocol"):
             Profile("invalid", "example.org", protocol="starttls")
