@@ -142,6 +142,8 @@ def install(source: Path, sha: str, root: Path, executable: Path, *, adopt_legac
             current.unlink()
         if adopting:
             replace_symlink(executable, legacy_target)
+            if legacy_backup.is_symlink() and legacy_backup.readlink() == legacy_target:
+                legacy_backup.unlink()
         elif executable_missing and executable.is_symlink():
             executable.unlink()
         raise
