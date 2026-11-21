@@ -460,8 +460,10 @@ def command_self_test(_args: argparse.Namespace) -> None:
                 def append_output(self, text: str, *, watch_events: bool = True) -> None:
                     self.lines.append(text)
 
-                def add_watch(self, pattern: str, color: str) -> WatchRule:
-                    rule = make_watch_rule(pattern, color)
+                def add_watch(
+                    self, pattern: str, color: str, **actions: Any,
+                ) -> WatchRule:
+                    rule = make_watch_rule(pattern, color, **actions)
                     self.watch_rules = [existing for existing in self.watch_rules if existing.pattern != rule.pattern]
                     self.watch_rules.append(rule)
                     return rule
