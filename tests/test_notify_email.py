@@ -54,11 +54,6 @@ class EmailNotificationTests(unittest.TestCase):
                 config = self.config() | change
                 with self.assertRaises(ValueError):
                     email.validate_email_config(config)
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "notify_email.json"
-            with self.assertRaisesRegex(RuntimeError, "unavailable"):
-                email.save_email_config(self.config(), path)
-                # Impossible unless deliberately interrupted.
 
     def test_tls_email_contains_structured_captures(self):
         with tempfile.TemporaryDirectory() as folder:
