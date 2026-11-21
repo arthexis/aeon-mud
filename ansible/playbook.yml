@@ -1,0 +1,7 @@
+---
+- name: Deploy aeon-mud CLI exclusively on gway-001
+  hosts: aeon_mud_managed
+  gather_facts: true
+  become: false
+  roles:
+    - aeon_mud
