@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import re
+import shutil
 import smtplib
 import subprocess
 import threading
@@ -53,8 +54,10 @@ def lcd_argv(label: str) -> list[str]:
 
 
 def _run_local(argv: list[str]) -> None:
-    # The installed owner CLI provides the sanctioned user-level LCD/sound
-    # path on gway-001. Do not invoke node_exec, a shell, or privileged APIs.
+    # These portable rules may run on a machine without the GWay provider.
+    # Absence is a supported no-op; no shell or privileged fallback is used.
+    if shutil.which("gway-lcd-sound") is None:
+        return
     subprocess.run(argv, check=True, stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                    timeout=10)
