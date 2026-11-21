@@ -80,11 +80,21 @@ def compile_watch_pattern(pattern: str, *, use_regex: bool = False) -> re.Patter
         pieces: list[str] = []
         names: set[str] = set()
         previous = 0
-        tokens = list(re.finditer(r"\[([A-Za-z_][A-Za-z0-9_]{0,31})\]|\*", text))
+        # Wildcard * is retained, while *** denotes a literal three-star
+        # marker (common in MUD messages). Backslash-star escapes one literal
+        # asterisk in any other context. Escaped brackets remain literal.
+        tokens = list(re.finditer(
+            r"\\[\\*\\[\\]\\\\]|\*{3}|\[([A-Za-z_][A-Za-z0-9_]{0,31})\]|\*", text
+        ))
         for index, token in enumerate(tokens):
             pieces.append(re.escape(text[previous:token.start()]))
+            raw = token.group()
             name = token.group(1)
-            if name is None:
+            if raw.startswith("\\"):
+                pieces.append(re.escape(raw[1:]))
+            elif raw == "***":
+                pieces.append(re.escape(raw))
+            elif raw == "*":
                 pieces.append(".*")
             else:
                 if name in names:
