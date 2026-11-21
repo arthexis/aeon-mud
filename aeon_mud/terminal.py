@@ -151,7 +151,7 @@ def describe_watch_rules(rules: list[WatchRule]) -> str:
         + (" --email" if rule.email else "")
         + (f" sound={rule.sound}" if rule.sound else "")
         + (f" lcd={rule.lcd}" if rule.lcd else "")
-        + (f" cooldown={rule.cooldown:g}s" if rule.sound or rule.lcd else "")
+        + (f" cooldown={rule.cooldown:g}s" if rule.sound or rule.lcd or rule.email else "")
         for rule in rules
     )
 
@@ -202,7 +202,7 @@ def watch_rules_to_data(rules: list[WatchRule]) -> list[dict[str, Any]]:
             item["sound"] = rule.sound
         if rule.lcd is not None:
             item["lcd"] = rule.lcd
-        if rule.sound or rule.lcd:
+        if rule.sound or rule.lcd or rule.email:
             item["cooldown"] = rule.cooldown
         result.append(item)
     return result
