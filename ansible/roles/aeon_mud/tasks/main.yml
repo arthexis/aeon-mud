@@ -28,6 +28,7 @@
       - "{{ aeon_mud_source }}"
       - --expected-sha
       - "{{ aeon_mud_expected_sha }}"
+      - --adopt-legacy
   environment:
     AEON_MUD_DEPLOY_NODE: "{{ inventory_hostname }}"
   register: aeon_mud_deploy
