@@ -1,0 +1,41 @@
+---
+- name: Refuse deployment outside the explicitly managed controller identity
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname == 'gway-001'
+      - ansible_hostname == 'gway-001'
+      - ansible_user_id == 'arthe'
+      - aeon_mud_expected_sha is match('^[0-9a-fA-F]{40}$')
+      - aeon_mud_source is defined
+    fail_msg: "aeon-mud is managed only on gway-001 as arthe with a pinned SHA"
+
+- name: Verify Python runtime and exact source revision
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import sys
+        assert sys.version_info >= (3, 10), "Python 3.10 or newer is required"
+  changed_when: false
+
+- name: Install immutable aeon-mud zipapp through owner deployment helper
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ aeon_mud_source }}/scripts/deploy_immutable.py"
+      - --source
+      - "{{ aeon_mud_source }}"
+      - --expected-sha
+      - "{{ aeon_mud_expected_sha }}"
+  environment:
+    AEON_MUD_DEPLOY_NODE: "{{ inventory_hostname }}"
+  register: aeon_mud_deploy
+  changed_when: "'updated' in aeon_mud_deploy.stdout"
+
+- name: Independently verify the installed client
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_env.HOME }}/.local/bin/aeon-mud"
+      - --help
+  changed_when: false
