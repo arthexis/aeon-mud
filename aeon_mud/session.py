@@ -584,6 +584,7 @@ def session_loop(
     try:
         transcript = Transcript(profile)
         ui = MudUi(profile, no_alt_screen=args.no_alt_screen)
+        ui.character = character
         controller = SessionController(
             profile, transport, codec, transcript, ui, password,
             private_peer_required=private_peer_required,
