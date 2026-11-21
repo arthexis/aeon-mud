@@ -50,7 +50,7 @@ class InteractiveModuleTests(unittest.TestCase):
         transcript = mock.Mock()
         controller = mock.Mock()
         self.assertTrue(commands.send_composed_input(
-            "/watch list", False, transcript, ui, controller
+            "//watch list", False, transcript, ui, controller
         ))
         controller.send_line.assert_not_called()
 
