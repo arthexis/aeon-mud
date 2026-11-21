@@ -175,6 +175,27 @@ through the active executable link, not an attempt journal. Running the
 same SHA is idempotent. No root privileges, daemon, external credentials,
 auto-login, system service, or SSH management are introduced.
 
+### One-time legacy venv adoption
+
+On gway-001 the owner Ansible role explicitly allows a one-time adoption
+only if `~/.local/bin/aeon-mud` is exactly a symlink to
+`~/.local/share/aeon-mud/venv/bin/aeon-mud`, owned by the same user and
+containing a regular executable. It does not adopt unrelated commands, symlink
+chains, or missing targets. The installer checks the exact authorized SHA and
+the new CLI before switching. It keeps the virtual environment unchanged and
+preserves `~/.local/share/aeon-mud/legacy-entry` as the rollback pointer.
+A failed activation restores the original command. Repeating installation of
+an already-managed release is idempotent.
+
+To manually restore the legacy command after a successful migration (only
+after stopping CLI sessions and inspecting the links):
+
+```sh
+test "$(readlink "$HOME/.local/share/aeon-mud/legacy-entry")" = "$HOME/.local/share/aeon-mud/venv/bin/aeon-mud"
+ln -s "$HOME/.local/share/aeon-mud/venv/bin/aeon-mud" "$HOME/.local/bin/.aeon-mud-rollback"
+mv -Tf "$HOME/.local/bin/.aeon-mud-rollback" "$HOME/.local/bin/aeon-mud"
+```
+
 The repository and Ansible role are designed for gway-001 by default.
 Other fleet nodes remain unapproved; adding a node requires an explicit
 separate policy change and acceptance. A merged PR alone does not imply
