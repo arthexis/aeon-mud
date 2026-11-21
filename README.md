@@ -379,7 +379,7 @@ clears **only the active composer**; the other draft stays untouched.
 - `Ctrl+N`: insert a newline in the wrapped input composer
 - `Ctrl+V`: guarded paste into the active composer (multi-line confirmation retained)
 - `//log [file]`: start logging to `output.log` or to the named file
-- `//watch PATTERN [--color COLOR]`: highlight received lines containing `PATTERN` (yellow by default); `*` matches any text. Use `//watch list` to inspect rules.
+- `//watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] [--lcd LABEL] [--cooldown SECONDS]`: highlight matching output and optionally deliver a local sound/LCD alert. Color defaults to yellow, sound cooldown to 5 seconds, and `*` matches any text. Use `//watch list` to inspect rules.
 - `//unwatch`: disable highlighting without deleting saved rules; `//unwatch PATTERN` removes one rule. A new `//watch` re-enables highlighting.
 - `//help`: list all client-side slash commands
 - `//save file` / `//load [file]`: save and restore session profile settings
@@ -391,6 +391,27 @@ clears **only the active composer**; the other draft stays untouched.
 
 Local commands start with `//` and are never forwarded to the MUD, including unknown `//` commands. Single-slash (`/`) input is sent to the server as normal. Watch rules and their enabled state are saved automatically in `realm_watches.json` per normalized `host:port`, shared by all character profiles connecting to that endpoint.
 Logging is opt-in; the client does not write session logs unless `//log` is used.
+
+### Watch events and gway-001 actions
+
+The client produces structured, versioned `mud.watch.matched` events from **complete received server lines**, never from terminal redraws or local `[client]` confirmations. A bounded, asynchronous queue (128 pending events) isolates the MUD reader from external notification playback; drops are counted and recent delivery receipts are kept in memory. Each rule is scoped to the normalized realm host and port, saved to `realm_watches.json` and included in `//save` session profiles. Watches without actions continue to highlight exactly as before.
+
+Examples to enter inside an aeon-mud session:
+
+```text
+//watch "You have mail" --color cyan --sound email
+//watch "A dragon appears" --sound github.warning --lcd "DRAGON ALERT" --cooldown 30
+//watch "Your character is sleeping" --sound notice
+//watch list
+//unwatch "A dragon appears"
+```
+
+`--sound notice` invokes the installed owner-level `gway-lcd-sound sound play notice`; `--sound github.warning` invokes `gway-lcd-sound sound play warning --motif github`. A motif is optional. The motif and sound names are validated as single identifiers (letters/digits/underscore/hyphen) and are **never** interpolated into a shell. The local command must be available in the session user's `PATH`; no action is sent to a remote machine or given privileged access. Motifs and sounds are validated by the installed sound provider at playback time.
+
+`--lcd "DRAGON ALERT"` shows a 15-second overlay with `MUD WATCH` on line 1 and the label shortened to 16 characters on line 2. Actions are dispatched only through the installed `gway-lcd-sound` user CLI, not direct I²C access. If the provider is missing or fails, the MUD stays connected; failures are reflected in bounded in-memory receipts.
+
+`--cooldown` is per realm and pattern (0–86400 seconds). The default 5-second interval prevents rapid duplicate alerts; `--cooldown 0` permits every matching completed line. Disabling watches with `//unwatch` also disables future event creation while keeping rules. Untrusted server text is **not** passed to the shell. This Stage A/B implementation provides local asynchronous events and the LCD/sound subscriber; it deliberately does not publish events to external webhooks or email recipients (future adapters must require explicit authorization and rate limits).
+
 
 ## Transport Notes
 

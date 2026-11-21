@@ -96,7 +96,7 @@ class ConnectionTests(unittest.TestCase):
                         self.connected = value
                     def set_status(self, value):
                         self.status = value
-                    def append_output(self, _value):
+                    def append_output(self, _value, *, watch_events=True):
                         pass
 
                 class Transcript:
