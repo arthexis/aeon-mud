@@ -379,7 +379,7 @@ clears **only the active composer**; the other draft stays untouched.
 - `Ctrl+N`: insert a newline in the wrapped input composer
 - `Ctrl+V`: guarded paste into the active composer (multi-line confirmation retained)
 - `//log [file]`: start logging to `output.log` or to the named file
-- `//watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] [--lcd LABEL] [--cooldown SECONDS] [--search] [--re]`: highlight matching output and optionally deliver a local sound/LCD alert. Matches start at column 1 by default; `--search` searches anywhere in each line, `--re` treats PATTERN as a Python regex, and both flags can be combined. Without `--re`, `*` matches any text. Color defaults to yellow and sound cooldown to 5 seconds. Use `//watch list` to inspect rules.
+- `//watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] [--lcd LABEL] [--cooldown SECONDS] [--search] [--re] [--email]`: highlight matching output and optionally deliver a local sound/LCD alert. Matches start at column 1 by default; `--search` searches anywhere in each line, `--re` treats PATTERN as a Python regex, and both flags can be combined. Without `--re`, `*` matches any text. Color defaults to yellow and sound cooldown to 5 seconds. Use `//watch list` to inspect rules.
 - `//unwatch`: disable highlighting without deleting saved rules; `//unwatch PATTERN` removes one rule. A new `//watch` re-enables highlighting.
 - `//help`: list all client-side slash commands
 - `//save file` / `//load [file]`: save and restore session profile settings
@@ -404,6 +404,8 @@ Examples to enter inside an aeon-mud session:
 //watch "^You (have|received) mail" --re --sound email
 //watch "dragon.*attacks" --re --search --sound warning
 //watch "Your character is sleeping" --sound notice
+//watch "You receive [item] from [sender]." --email
+//watch "^(?P<actor>\\w+) deals (\\d+) damage" --re --email
 //watch list
 //unwatch "A dragon appears"
 ```
@@ -414,7 +416,23 @@ Examples to enter inside an aeon-mud session:
 
 By default `//watch dragon` matches `dragon attacks` but not `A dragon attacks`. Add `--search` to find `dragon` anywhere in the line. Add `--re` to interpret regex constructs such as `^`, `.*`, and `(a|b)` rather than the default literal-with-`*` wildcard matching. `--re --search` is supported. These modes affect both color highlighting and sound/LCD event emission. Previously saved watch rules without these flags use the new anchored default; add `--search` to retain their former anywhere-in-line behavior.
 
-`--cooldown` is per realm and pattern (0–86400 seconds). The default 5-second interval prevents rapid duplicate alerts; `--cooldown 0` permits every matching completed line. Disabling watches with `//unwatch` also disables future event creation while keeping rules. Untrusted server text is **not** passed to the shell. This Stage A/B implementation provides local asynchronous events and the LCD/sound subscriber; it deliberately does not publish events to external webhooks or email recipients (future adapters must require explicit authorization and rate limits).
+### Structured watch captures and offline email notification
+
+Without `--re`, each `[sigil]` identifier (letters, digits and underscores, starting with a letter or underscore) captures the corresponding variable text. For example, `//watch "You receive [item] from [sender]." --email` produces `captures.named.item` and `captures.named.sender`. A capture at the end of the pattern consumes the remaining line. Existing `*` wildcards still work, but do not capture values. Duplicate sigil names are rejected. A sigil capture takes precedence over a literal square-bracket phrase that matches the sigil grammar; to match brackets literally, use `--re` and escape them.
+
+With `--re`, Python regular-expression groups are used **instead of sigils**. Numbered captures are in `captures.groups` and named regex groups additionally appear in `captures.named`. Every event contains `schema`, `event_id`, `timestamp`, `realm`, `character`, `pattern`, `message`, and `captures`. All fields are bounded to the existing logical-line length; secret login commands remain excluded.
+
+`--email` is a flag, not an email address. Delivery settings are **offline configuration**, not commands to enter in a MUD session. Configure an authenticated, TLS-only SMTP relay in your normal Bash or PowerShell terminal (replace the example values):
+
+```bash
+aeon-mud notify email configure --smtp-host smtp.example.org --smtp-port 465 --tls ssl --from mud@example.org --to alerts@example.org --username mud-user --password-env MUD_SMTP_PASSWORD
+aeon-mud notify email show
+aeon-mud notify email disable
+```
+
+The client saves recipients and SMTP routing to `~/.aeon-mud/client/notify_email.json` on Unix (under its private configuration directory) and does not store the SMTP password there. Set the value of the named password environment variable in the process **launching** aeon-mud; avoid putting credentials in shell history. For servers without SMTP authentication, omit `--username` and `--password-env`. Use `--tls starttls` and the appropriate port when your relay requires STARTTLS. The command performs no test send; delivery occurs only after an enabled `--email` watch matches a completed server line. The email body is JSON with structured capture values; untrusted text is not used for mail headers. Notifications are capped at one email per minute and ten per hour per client session, in addition to each rule's cooldown. Sending failures are isolated from the MUD connection.
+
+`--cooldown` is per realm and pattern (0–86400 seconds). The default 5-second interval prevents rapid duplicate alerts; `--cooldown 0` permits every matching completed line. Disabling watches with `//unwatch` also disables future event creation while keeping rules. Untrusted server text is **not** passed to the shell. This implementation provides local asynchronous sound/LCD actions and opt-in TLS SMTP email delivery. External webhook publishing is not enabled.
 
 
 ## Transport Notes
