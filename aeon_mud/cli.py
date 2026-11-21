@@ -219,8 +219,8 @@ def resolve_secret_profile(name: str) -> Profile:
 
 
 def command_secret_set(args: argparse.Namespace) -> None:
-    if not Dpapi.available():
-        raise SystemExit("Stored secrets require Windows DPAPI")
+    if not SecretStore.available():
+        raise SystemExit("Stored secrets require Windows DPAPI or Python cryptography on Unix")
     if args.character:
         profile = resolve_secret_profile(args.profile)
         character = validate_character_name(args.character)
@@ -235,7 +235,7 @@ def command_secret_set(args: argparse.Namespace) -> None:
         return
     password = args.password or getpass.getpass(f"Password for {args.profile}: ")
     SecretStore().set_password(args.profile, password)
-    print(f"Stored DPAPI-protected password for {args.profile}")
+    print(f"Stored encrypted password for {args.profile}")
 
 
 def command_secret_clear(args: argparse.Namespace) -> None:
