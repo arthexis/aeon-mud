@@ -14,6 +14,7 @@ from .config import *
 from .profiles import Profile, HistoryStore
 from .terminal_text import *
 from .input import InputLayout, layout_input_buffer
+from .realm_watches import load_realm_watches
 
 @dataclass(frozen=True)
 class WatchRule:
@@ -23,7 +24,7 @@ class WatchRule:
     regex: re.Pattern[str]
 
     def matches(self, line: str) -> bool:
-        return self.regex.match(strip_ansi(str(line))) is not None
+        return self.regex.search(strip_ansi(str(line))) is not None
 
 
 def strip_outer_quotes(text: str) -> str:
@@ -52,7 +53,7 @@ def compile_watch_pattern(pattern: str) -> re.Pattern[str]:
     text = strip_outer_quotes(pattern)
     if not text:
         raise ValueError("pattern must not be empty")
-    regex = "^" + ".*".join(re.escape(part) for part in text.split("*"))
+    regex = ".*".join(re.escape(part) for part in text.split("*"))
     return re.compile(regex)
 
 
@@ -85,16 +86,24 @@ def describe_watch_rules(rules: list[WatchRule]) -> str:
 
 
 def parse_watch_arguments(argument: str) -> tuple[str, str]:
+    """Accept /watch PATTERN [--color COLOR], defaulting to yellow."""
     text = argument.strip()
     if not text:
-        raise ValueError("usage: /watch pattern color")
-    parts = text.rsplit(None, 1)
-    if len(parts) != 2:
-        raise ValueError("usage: /watch pattern color")
-    pattern, color = parts
+        raise ValueError("usage: /watch pattern [--color COLOR]")
+    color = "yellow"
+    marker = " --color "
+    if marker in text:
+        pattern, color = text.rsplit(marker, 1)
+        if not color.strip() or not pattern.strip():
+            raise ValueError("usage: /watch pattern [--color COLOR]")
+    elif text.startswith("--color "):
+        raise ValueError("pattern must not be empty")
+    else:
+        pattern = text
     pattern = strip_outer_quotes(pattern)
     if not pattern:
         raise ValueError("pattern must not be empty")
+    resolve_watch_color(color)
     return pattern, color
 
 
@@ -355,6 +364,14 @@ class MudUi:
         self.secret_entry = False
         self.connected = True
         self.watch_rules: list[WatchRule] = []
+        self.watches_enabled = True
+        try:
+            saved_rules, saved_enabled = load_realm_watches(profile)
+            self.watch_rules = watch_rules_from_data(saved_rules)
+            self.watches_enabled = saved_enabled is True
+        except (OSError, ValueError, TypeError):
+            # Malformed preferences must not prevent connecting to a realm.
+            self.watch_rules = []
         self.profile_config_path: Path | None = None
         self.lock = threading.RLock()
         self.started = False
@@ -465,9 +482,15 @@ class MudUi:
             self._invalidate_display_cache()
             self.render()
 
+    def set_watches_enabled(self, enabled: bool) -> None:
+        with self.lock:
+            self.watches_enabled = enabled
+            self._invalidate_display_cache()
+            self.render()
+
     def describe_watches(self) -> str:
         with self.lock:
-            return describe_watch_rules(self.watch_rules)
+            return ("Enabled: " if self.watches_enabled else "Disabled: ") + describe_watch_rules(self.watch_rules)
 
     def append_output(self, text: str) -> None:
         # Cap one received batch as well as retained lines. A long physical
@@ -506,7 +529,7 @@ class MudUi:
             return self._display_cache_rows
         rows: deque[str] = deque()
         cache_bytes = 0
-        rules = list(self.watch_rules)
+        rules = list(self.watch_rules) if self.watches_enabled else []
         for line in self.lines:
             raw_line = str(line)
             bounded = _clip_ansi_line(raw_line, MAX_SCROLLBACK_LINE_CHARS)
