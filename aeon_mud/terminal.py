@@ -89,13 +89,13 @@ def parse_watch_arguments(argument: str) -> tuple[str, str]:
     """Accept /watch PATTERN [--color COLOR], defaulting to yellow."""
     text = argument.strip()
     if not text:
-        raise ValueError("usage: /watch pattern [--color COLOR]")
+        raise ValueError("usage: //watch pattern [--color COLOR]")
     color = "yellow"
     marker = " --color "
     if marker in text:
         pattern, color = text.rsplit(marker, 1)
         if not color.strip() or not pattern.strip():
-            raise ValueError("usage: /watch pattern [--color COLOR]")
+            raise ValueError("usage: //watch pattern [--color COLOR]")
     elif text.startswith("--color "):
         raise ValueError("pattern must not be empty")
     else:
