@@ -96,6 +96,10 @@ def save_email_config(config: dict[str, Any], path: Path | None = None) -> None:
     folder = path.parent
     if not folder.exists():
         folder.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if os.name != "nt":
+        if folder.is_symlink() or folder.stat().st_uid != os.getuid():
+            raise PermissionError("unsafe notification config directory")
+        folder.chmod(0o700)
     _check_private(path)
     fd, temporary = tempfile.mkstemp(prefix=".notify-email-", dir=folder)
     try:
