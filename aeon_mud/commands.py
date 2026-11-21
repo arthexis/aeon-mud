@@ -276,16 +276,15 @@ def parse_watch_with_actions(argument: str) -> tuple[str, str, str | None, str |
             index += 1
     if not words:
         raise ValueError("pattern must not be empty")
-    pattern, inferred_color = parse_watch_arguments(" ".join(words))
+    if len(words) == 1:
+        # shlex already stripped quotes. Do not misread a quoted pattern
+        # such as "danger red" as a legacy positional color.
+        pattern, inferred_color = words[0], "yellow"
+    elif color is not None:
+        pattern, inferred_color = " ".join(words), color
+    else:
+        pattern, inferred_color = parse_watch_arguments(" ".join(words))
     if color is not None:
-        # Explicit --color always wins over positional legacy color.
-        if len(words) > 1:
-            try:
-                resolve_watch_color(words[-1])
-            except ValueError:
-                pass
-            else:
-                pattern = " ".join(words[:-1])
         inferred_color = color
     if not 0 <= cooldown <= 86400:
         raise ValueError("--cooldown requires seconds 0-86400")
