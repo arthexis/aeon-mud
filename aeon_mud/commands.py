@@ -198,8 +198,8 @@ def handle_paste(ui: MudUi, controller: SessionController) -> None:
         to_send = (prefix + line) if first else line
         first = False
         try:
-            if not send_composed_input(to_send, False, controller.transcript, ui, controller):
-                return
+            if not handle_local_command(to_send, controller.transcript, ui):
+                controller.send_line(to_send, secret=False, remember=True)
         except OSError as exc:
             remaining = [to_send] + lines[index + 1 :]
             ui.replace_input("\n".join(remaining))
