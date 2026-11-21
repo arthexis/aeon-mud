@@ -40,6 +40,7 @@ from typing import Any, Callable
 from aeon_mud.config import *
 from aeon_mud.profiles import *
 from aeon_mud.security import *
+from aeon_mud.notify_email import email_config_path, load_email_config, save_email_config
 from aeon_mud.terminal_text import *
 from aeon_mud.telnet import *
 from aeon_mud.transport import *
@@ -249,6 +250,42 @@ def command_secret_clear(args: argparse.Namespace) -> None:
     print(f"Cleared password for {args.profile}")
 
 
+
+def command_notify_email_configure(args: argparse.Namespace) -> None:
+    """Configure recipient and SMTP transport offline, never a password."""
+    config = {
+        "host": args.smtp_host,
+        "port": args.smtp_port,
+        "tls": args.tls,
+        "from": args.sender,
+        "to": args.to,
+        "enabled": True,
+    }
+    if args.username:
+        config["username"] = args.username
+        config["password_env"] = args.password_env
+    save_email_config(config)
+    print(f"Email notifications enabled for {len(args.to)} recipient(s); configuration: {email_config_path()}")
+
+
+def command_notify_email_show(_args: argparse.Namespace) -> None:
+    config = load_email_config()
+    if config is None:
+        print(f"Email notifications are not configured. Path: {email_config_path()}")
+    else:
+        print(compact_json(config))
+
+
+def command_notify_email_disable(_args: argparse.Namespace) -> None:
+    config = load_email_config()
+    if config is None:
+        print("Email notifications are not configured")
+        return
+    config["enabled"] = False
+    save_email_config(config)
+    print("Email notifications disabled")
+
+
 def command_history_clear(args: argparse.Namespace) -> None:
     HistoryStore().clear(args.profile)
     print(f"Cleared history for {args.profile}")
@@ -264,6 +301,7 @@ def command_paths(_args: argparse.Namespace) -> None:
     print(f"known_hosts: {known_hosts_path()}")
     print(f"history: {history_path()}")
     print(f"secrets: {secrets_path()}")
+    print(f"email_notifications: {email_config_path()}")
     print(f"transcripts: {transcript_dir()}")
 
 
@@ -669,6 +707,25 @@ def build_parser() -> argparse.ArgumentParser:
     secret_clear.add_argument("profile")
     secret_clear.add_argument("--character", help="clear only this character's password")
     secret_clear.set_defaults(func=command_secret_clear)
+
+    notify = subparsers.add_parser("notify", help="configure offline watch notifications")
+    notify_sub = notify.add_subparsers(dest="notify_command", required=True)
+    notify_email = notify_sub.add_parser("email", help="configure TLS SMTP delivery")
+    notify_email_sub = notify_email.add_subparsers(dest="notify_email_command", required=True)
+    email_set = notify_email_sub.add_parser("configure", help="save recipient/SMTP settings; no email is sent")
+    email_set.add_argument("--smtp-host", required=True)
+    email_set.add_argument("--smtp-port", type=int, default=465)
+    email_set.add_argument("--tls", choices=("ssl", "starttls"), default="ssl")
+    email_set.add_argument("--from", dest="sender", required=True, metavar="SENDER")
+    email_set.add_argument("--to", required=True, action="append", metavar="RECIPIENT",
+                           help="recipient; repeat for multiple recipients (max 5)")
+    email_set.add_argument("--username", help="SMTP username, not the password")
+    email_set.add_argument("--password-env", help="name of environment variable containing SMTP password")
+    email_set.set_defaults(func=command_notify_email_configure)
+    email_show = notify_email_sub.add_parser("show", help="inspect saved non-secret configuration")
+    email_show.set_defaults(func=command_notify_email_show)
+    email_disable = notify_email_sub.add_parser("disable", help="disable email while retaining configuration")
+    email_disable.set_defaults(func=command_notify_email_disable)
 
     history = subparsers.add_parser("history", help="manage command history")
     history_sub = history.add_subparsers(dest="history_command", required=True)

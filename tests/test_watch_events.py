@@ -31,17 +31,19 @@ class WatchEventTests(unittest.TestCase):
 
     def test_watch_command_actions_and_legacy(self):
         self.assertEqual(commands.parse_watch_with_actions('"You have mail" --color cyan --sound github.notice --lcd "NEW MAIL" --cooldown 30'),
-                         ("You have mail", "cyan", "github.notice", "NEW MAIL", 30, False, False))
+                         ("You have mail", "cyan", "github.notice", "NEW MAIL", 30, False, False, False))
         self.assertEqual(commands.parse_watch_with_actions('dragon red'),
-                         ("dragon", "red", None, None, 5, False, False))
+                         ("dragon", "red", None, None, 5, False, False, False))
         self.assertEqual(commands.parse_watch_with_actions('"danger red" --sound notice'),
-                         ("danger red", "yellow", "notice", None, 5, False, False))
+                         ("danger red", "yellow", "notice", None, 5, False, False, False))
         self.assertEqual(commands.parse_watch_with_actions('"dragon appears" --sound attention'),
-                         ("dragon appears", "yellow", "attention", None, 5, False, False))
+                         ("dragon appears", "yellow", "attention", None, 5, False, False, False))
         self.assertEqual(commands.parse_watch_with_actions('"^dragon.*" --re --search --sound github.warning'),
-                         ("^dragon.*", "yellow", "github.warning", None, 5, True, True))
+                         ("^dragon.*", "yellow", "github.warning", None, 5, True, True, False))
         self.assertEqual(commands.parse_watch_with_actions('dragon --search --re'),
-                         ("dragon", "yellow", None, None, 5, True, True))
+                         ("dragon", "yellow", None, None, 5, True, True, False))
+        self.assertEqual(commands.parse_watch_with_actions('"You get [item]" --email --search'),
+                         ("You get [item]", "yellow", None, None, 5, True, False, True))
         for item in ("x --sound", "x --sound a.b.c", "x --cooldown nan",
                      "x --cooldown -3", "x --lcd", "x --bad flag"):
             with self.subTest(item=item), self.assertRaises(ValueError):
@@ -127,6 +129,61 @@ class WatchEventTests(unittest.TestCase):
             with self.subTest(pattern=pattern), self.assertRaisesRegex(ValueError, "invalid watch regex"):
                 terminal.make_watch_rule(pattern, "cyan", use_regex=True)
         self.assertTrue(terminal.make_watch_rule("*", "yellow").matches("anything"))
+
+    def test_sigil_capture_values_are_structured_in_email_event(self):
+        events = []
+        rule = terminal.make_watch_rule(
+            "You receive [item] from [sender].", "cyan", email=True, cooldown=0
+        )
+        self.assertTrue(rule.matches("You receive a brass key from Merlin."))
+        match = rule.match("You receive a brass key from Merlin.")
+        self.assertEqual(rule.captures(match)["named"],
+                         {"item": "a brass key", "sender": "Merlin"})
+        with mock.patch.object(watch_events, "send_watch_email", side_effect=lambda event: events.append(event)):
+            bus = watch_events.WatchEventBus(clock=lambda: 100)
+            bus.feed("You receive a brass key from Mer", (rule,), self.profile(), "Alice")
+            bus.feed("lin.\n", (rule,), self.profile(), "Alice")
+            bus.pending.join()
+            bus.close()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["captures"]["named"]["item"], "a brass key")
+        self.assertEqual(events[0]["captures"]["named"]["sender"], "Merlin")
+        self.assertEqual(events[0]["character"], "Alice")
+        self.assertEqual(events[0]["type"], "mud.watch.matched")
+        self.assertEqual(events[0]["schema"], 1)
+
+    def test_regex_captures_named_and_numbered_groups(self):
+        rule = terminal.make_watch_rule(
+            r"^(?P<actor>\w+) deals (\d+) damage", "red", use_regex=True, email=True
+        )
+        match = rule.match("Merlin deals 42 damage to a goblin")
+        self.assertEqual(rule.captures(match)["named"], {"actor": "Merlin"})
+        self.assertEqual(rule.captures(match)["groups"], ["Merlin", "42"])
+        literal = terminal.make_watch_rule("[actor] deals [amount] damage", "red")
+        self.assertEqual(literal.captures(literal.match("Merlin deals 42 damage"))["named"],
+                         {"actor": "Merlin", "amount": "42"})
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            terminal.make_watch_rule("[actor] gives [actor] a coin", "cyan")
+
+    def test_email_rate_limit_and_rule_persistence(self):
+        rule = terminal.make_watch_rule("Alert [name]", "yellow", email=True, cooldown=0)
+        serialized = terminal.watch_rules_to_data([rule])
+        self.assertEqual(serialized[0]["email"], True)
+        restored = terminal.watch_rules_from_data(serialized)[0]
+        self.assertTrue(restored.email)
+        calls = []
+        clock = [100.0]
+        with mock.patch.object(watch_events, "send_watch_email", side_effect=lambda e: calls.append(e)):
+            bus = watch_events.WatchEventBus(clock=lambda: clock[0])
+            bus.feed("Alert one\nAlert two\n", (restored,), self.profile())
+            bus.pending.join()
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(any(r["errors"] == ["email:rate-limited"] for r in bus.receipts))
+            clock[0] = 161
+            bus.feed("Alert three\n", (restored,), self.profile())
+            bus.pending.join()
+            self.assertEqual(len(calls), 2)
+            bus.close()
 
     def test_cooldown_drops_repeated_match_without_blocking_receive(self):
         t = [100.0]

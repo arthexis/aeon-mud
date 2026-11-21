@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import queue
 import re
+import smtplib
 import subprocess
 import threading
 import time
@@ -18,6 +19,7 @@ from typing import Any
 
 from .terminal_text import strip_ansi
 from .realm_watches import realm_key
+from .notify_email import send_watch_email
 
 _SOUND_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 MAX_EVENT_LINE = 1024
@@ -77,6 +79,9 @@ class WatchEventBus:
         self.worker: threading.Thread | None = None
         self.closed = False
         self.dropped = 0
+        self.last_email = float("-inf")
+        self.email_count = 0
+        self.email_window = self.clock()
 
     def feed(self, chunk: str, rules: tuple, profile, character: str | None = None) -> None:
         """Consume *server* text, matching only complete logical lines."""
@@ -96,10 +101,10 @@ class WatchEventBus:
                     continue
                 for rule in rules:
                     try:
-                        matched = rule.matches(clean)
+                        matched = rule.match(clean)
                     except (ValueError, re.error):
                         continue
-                    if not matched:
+                    if matched is None:
                         continue
                     scope = (realm_key(profile), rule.pattern)
                     now = self.clock()
@@ -117,6 +122,8 @@ class WatchEventBus:
                         "character": character,
                         "pattern": rule.pattern,
                         "message": clean,
+                        "captures": rule.captures(matched),
+                        "email": getattr(rule, "email", False),
                         "sound": getattr(rule, "sound", None),
                         "lcd": getattr(rule, "lcd", None),
                     }
@@ -146,6 +153,24 @@ class WatchEventBus:
                 if event["lcd"]:
                     actions.append(lcd_argv(event["lcd"]))
                 errors: list[str] = []
+                # Email is independently rate-limited across rules: no more
+                # than one per 60s and ten per hour per session.
+                if event.get("email"):
+                    with self.lock:
+                        now = self.clock()
+                        if now - self.email_window >= 3600:
+                            self.email_window, self.email_count = now, 0
+                        allowed = now - self.last_email >= 60 and self.email_count < 10
+                        if allowed:
+                            self.last_email = now
+                            self.email_count += 1
+                    if allowed:
+                        try:
+                            send_watch_email(event)
+                        except (OSError, RuntimeError, ValueError, TimeoutError, smtplib.SMTPException) as exc:
+                            errors.append("email:" + type(exc).__name__)
+                    else:
+                        errors.append("email:rate-limited")
                 for argv in actions:
                     try:
                         self.executor(argv)

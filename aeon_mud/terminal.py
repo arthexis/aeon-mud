@@ -28,10 +28,20 @@ class WatchRule:
     cooldown: float = DEFAULT_COOLDOWN
     search: bool = False
     use_regex: bool = False
+    email: bool = False
+
+    def match(self, line: str) -> re.Match[str] | None:
+        plain = strip_ansi(str(line))
+        return self.regex.search(plain) if self.search else self.regex.match(plain)
 
     def matches(self, line: str) -> bool:
-        plain = strip_ansi(str(line))
-        return (self.regex.search(plain) if self.search else self.regex.match(plain)) is not None
+        return self.match(line) is not None
+
+    def captures(self, matched: re.Match[str]) -> dict[str, Any]:
+        return {
+            "named": {key: value for key, value in matched.groupdict().items() if value is not None},
+            "groups": [value for value in matched.groups()],
+        }
 
 
 def strip_outer_quotes(text: str) -> str:
@@ -62,7 +72,29 @@ def compile_watch_pattern(pattern: str, *, use_regex: bool = False) -> re.Patter
         raise ValueError("pattern must not be empty")
     if len(text) > 256:
         raise ValueError("watch pattern must be at most 256 characters")
-    expression = text if use_regex else ".*".join(re.escape(part) for part in text.split("*"))
+    if use_regex:
+        expression = text
+    else:
+        # [sigil] captures one field. Wildcards retain the original * syntax.
+        # A trailing capture consumes the remainder of a logical line.
+        pieces: list[str] = []
+        names: set[str] = set()
+        previous = 0
+        tokens = list(re.finditer(r"\[([A-Za-z_][A-Za-z0-9_]{0,31})\]|\*", text))
+        for index, token in enumerate(tokens):
+            pieces.append(re.escape(text[previous:token.start()]))
+            name = token.group(1)
+            if name is None:
+                pieces.append(".*")
+            else:
+                if name in names:
+                    raise ValueError(f"duplicate watch capture: {name}")
+                names.add(name)
+                trailing = index == len(tokens) - 1 and token.end() == len(text)
+                pieces.append(f"(?P<{name}>.+)" if trailing else f"(?P<{name}>.+?)")
+            previous = token.end()
+        pieces.append(re.escape(text[previous:]))
+        expression = "".join(pieces)
     try:
         return re.compile(expression)
     except re.error as exc:
@@ -72,12 +104,12 @@ def compile_watch_pattern(pattern: str, *, use_regex: bool = False) -> re.Patter
 def make_watch_rule(
     pattern: str, color: str, *, sound: str | None = None,
     lcd: str | None = None, cooldown: float = DEFAULT_COOLDOWN,
-    search: bool = False, use_regex: bool = False,
+    search: bool = False, use_regex: bool = False, email: bool = False,
 ) -> WatchRule:
     clean_pattern = strip_outer_quotes(pattern)
     clean_color, sgr = resolve_watch_color(color)
-    if not isinstance(search, bool) or not isinstance(use_regex, bool):
-        raise ValueError("search and regex flags must be booleans")
+    if not all(isinstance(flag, bool) for flag in (search, use_regex, email)):
+        raise ValueError("search, regex and email flags must be booleans")
     if sound is not None:
         parse_sound(sound)
     if lcd is not None:
@@ -91,6 +123,7 @@ def make_watch_rule(
         regex=compile_watch_pattern(clean_pattern, use_regex=use_regex),
         search=search,
         use_regex=use_regex,
+        email=email,
         sound=sound,
         lcd=lcd,
         cooldown=float(cooldown),
@@ -115,9 +148,10 @@ def describe_watch_rules(rules: list[WatchRule]) -> str:
         f"{rule.pattern}={rule.color}"
         + (" --search" if rule.search else "")
         + (" --re" if rule.use_regex else "")
+        + (" --email" if rule.email else "")
         + (f" sound={rule.sound}" if rule.sound else "")
         + (f" lcd={rule.lcd}" if rule.lcd else "")
-        + (f" cooldown={rule.cooldown:g}s" if rule.sound or rule.lcd else "")
+        + (f" cooldown={rule.cooldown:g}s" if rule.sound or rule.lcd or rule.email else "")
         for rule in rules
     )
 
@@ -162,11 +196,13 @@ def watch_rules_to_data(rules: list[WatchRule]) -> list[dict[str, Any]]:
             item["search"] = True
         if rule.use_regex:
             item["re"] = True
+        if rule.email:
+            item["email"] = True
         if rule.sound is not None:
             item["sound"] = rule.sound
         if rule.lcd is not None:
             item["lcd"] = rule.lcd
-        if rule.sound or rule.lcd:
+        if rule.sound or rule.lcd or rule.email:
             item["cooldown"] = rule.cooldown
         result.append(item)
     return result
@@ -194,8 +230,9 @@ def watch_rules_from_data(data: Any) -> list[WatchRule]:
             raise ValueError(f"watch rule {index}: lcd must be a string")
         search = item.get("search", False)
         use_regex = item.get("re", False)
+        email = item.get("email", False)
         rules.append(make_watch_rule(pattern, color, sound=sound, lcd=lcd, cooldown=cooldown,
-                                     search=search, use_regex=use_regex))
+                                     search=search, use_regex=use_regex, email=email))
     return rules
 
 
@@ -526,10 +563,10 @@ class MudUi:
     def add_watch(
         self, pattern: str, color: str, *, sound: str | None = None,
         lcd: str | None = None, cooldown: float = DEFAULT_COOLDOWN,
-        search: bool = False, use_regex: bool = False,
+        search: bool = False, use_regex: bool = False, email: bool = False,
     ) -> WatchRule:
         rule = make_watch_rule(pattern, color, sound=sound, lcd=lcd, cooldown=cooldown,
-                               search=search, use_regex=use_regex)
+                               search=search, use_regex=use_regex, email=email)
         with self.lock:
             self.watch_rules = [existing for existing in self.watch_rules if existing.pattern != rule.pattern]
             self.watch_rules.append(rule)
