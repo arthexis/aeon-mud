@@ -678,7 +678,7 @@ def session_loop(
                 ui.set_status(
                     "Keys: TAB switch buffer, CTRL+LEFT/RIGHT move words, CTRL+K delete to end, "
                     "UP/DOWN scroll, CTRL+UP/DOWN history, CTRL+N newline, CTRL+V paste, "
-                    "/save FILE, /load [FILE], CTRL+] quit"
+                    "//help, //save FILE, //load [FILE], CTRL+] quit"
                 )
             elif key.name == "newline":
                 if ui.secret_entry:
