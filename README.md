@@ -435,6 +435,23 @@ The client saves recipients and SMTP routing to `~/.aeon-mud/client/notify_email
 `--cooldown` is per realm and pattern (0–86400 seconds). The default 5-second interval prevents rapid duplicate alerts; `--cooldown 0` permits every matching completed line. Disabling watches with `//unwatch` also disables future event creation while keeping rules. Untrusted server text is **not** passed to the shell. This implementation provides local asynchronous sound/LCD actions and opt-in TLS SMTP email delivery. External webhook publishing is not enabled.
 
 
+### Portable realm watch files
+
+Realm watches can be transferred between computers without copying private credentials, SMTP configuration, or the rest of the client profile:
+
+```bash
+aeon-mud realm export realm-watches.json
+aeon-mud realm export one-realm.json --realm mud.example:4000
+aeon-mud realm import realm-watches.json
+aeon-mud realm import realm-watches.json --replace
+```
+
+Export creates a **versioned JSON file**, containing the enabled state and saved watch rules for all realms by default. `--realm HOST:PORT` restricts export to a specific normalized endpoint. Export refuses to overwrite an existing file.
+
+Import validates the entire file (patterns, sigils, regexes, notification flags, colors and limits) before writing anything. By default it **merges** imported endpoints into the local realm store, replacing only corresponding endpoint entries and preserving unrelated realms. `--replace` replaces the complete local realm-watch collection. The import is atomic and does not require that email, LCD, or sound be installed.
+
+Imported rules retain `--email`, `--sound` and `--lcd` actions. On systems without `gway-lcd-sound`, sound/LCD actions silently do nothing; email without enabled local SMTP configuration or its required password environment variable also silently does nothing. Pattern matching, highlighting, captures and other actions continue to work. When providers are configured later, the saved actions become effective without re-importing. Neither the SMTP settings nor passwords are exported, so configure email separately on the destination.
+
 ## Transport Notes
 
 Telnet is plaintext. The client adds guard rails around plaintext sessions, but
