@@ -487,25 +487,26 @@ def command_self_test(_args: argparse.Namespace) -> None:
                     return describe_watch_rules(self.watch_rules)
 
             ui = FakeUi()
-            assert handle_local_command("/look", transcript, ui) is True
-            assert handle_local_command("/watch You say cyan", transcript, ui) is True
+            assert handle_local_command("//look", transcript, ui) is True
+            assert handle_local_command("/look", transcript, ui) is False
+            assert handle_local_command("//watch You say cyan", transcript, ui) is True
             assert len(ui.watch_rules) == 1
             assert ui.watch_rules[0].pattern == "You say"
             assert apply_watch_rules("You say hello", ui.watch_rules).startswith("\x1b[36m")
-            assert handle_local_command("/watch", transcript, ui) is True
+            assert handle_local_command("//watch", transcript, ui) is True
             assert "You say=cyan" in ui.status
             assert any("[client] Watches: You say=cyan" in line for line in ui.lines)
-            assert handle_local_command("/watch remove You say", transcript, ui) is True
+            assert handle_local_command("//watch remove You say", transcript, ui) is True
             assert not ui.watch_rules
-            assert handle_local_command("/watch * red", transcript, ui) is True
+            assert handle_local_command("//watch * red", transcript, ui) is True
             assert apply_watch_rules("anything", ui.watch_rules).startswith("\x1b[31m")
-            assert handle_local_command("/watch clear", transcript, ui) is True
+            assert handle_local_command("//watch clear", transcript, ui) is True
             assert not ui.watch_rules
-            assert handle_local_command("/save", transcript, ui) is True
+            assert handle_local_command("//save", transcript, ui) is True
             assert "usage" in ui.status
-            assert handle_local_command("/watch You cyan", transcript, ui) is True
+            assert handle_local_command("//watch You cyan", transcript, ui) is True
             ui.profile.paste_line_delay = 0.25
-            assert handle_local_command("/save session-profile.json", transcript, ui) is True
+            assert handle_local_command("//save session-profile.json", transcript, ui) is True
             assert ui.profile_config_path == Path("session-profile.json")
             saved = load_json(Path("session-profile.json"), {})
             assert saved["format"] == SESSION_PROFILE_FORMAT
@@ -513,17 +514,17 @@ def command_self_test(_args: argparse.Namespace) -> None:
             assert saved["runtime_settings"]["paste_line_delay"] == 0.25
             ui.clear_watches()
             ui.profile.paste_line_delay = 0.01
-            assert handle_local_command("/load", transcript, ui) is True
+            assert handle_local_command("//load", transcript, ui) is True
             assert ui.profile.paste_line_delay == 0.25
             assert len(ui.watch_rules) == 1
             assert ui.watch_rules[0].matches("You see a gate")
-            assert handle_local_command("/load missing-profile.json", transcript, ui) is True
+            assert handle_local_command("//load missing-profile.json", transcript, ui) is True
             assert ui.status.startswith("Load error:")
-            assert handle_local_command("/log named.log", transcript, ui) is True
+            assert handle_local_command("//log named.log", transcript, ui) is True
             assert transcript.path == Path("named.log")
             transcript.write("recv", "named")
             assert "named" in Path("named.log").read_text(encoding="utf-8")
-            assert handle_local_command("/log off", transcript, ui) is True
+            assert handle_local_command("//log off", transcript, ui) is True
             assert transcript.path is None
 
             class CaptureTransport(Transport):
