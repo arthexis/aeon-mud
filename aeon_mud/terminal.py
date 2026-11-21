@@ -15,6 +15,7 @@ from .profiles import Profile, HistoryStore
 from .terminal_text import *
 from .input import InputLayout, layout_input_buffer
 from .realm_watches import load_realm_watches
+from .watch_events import WatchEventBus, parse_sound, lcd_argv, DEFAULT_COOLDOWN
 
 @dataclass(frozen=True)
 class WatchRule:
@@ -22,6 +23,9 @@ class WatchRule:
     color: str
     sgr: str
     regex: re.Pattern[str]
+    sound: str | None = None
+    lcd: str | None = None
+    cooldown: float = DEFAULT_COOLDOWN
 
     def matches(self, line: str) -> bool:
         return self.regex.search(strip_ansi(str(line))) is not None
@@ -57,14 +61,26 @@ def compile_watch_pattern(pattern: str) -> re.Pattern[str]:
     return re.compile(regex)
 
 
-def make_watch_rule(pattern: str, color: str) -> WatchRule:
+def make_watch_rule(
+    pattern: str, color: str, *, sound: str | None = None,
+    lcd: str | None = None, cooldown: float = DEFAULT_COOLDOWN,
+) -> WatchRule:
     clean_pattern = strip_outer_quotes(pattern)
     clean_color, sgr = resolve_watch_color(color)
+    if sound is not None:
+        parse_sound(sound)
+    if lcd is not None:
+        lcd_argv(lcd)
+    if isinstance(cooldown, bool) or not isinstance(cooldown, (int, float)) or not 0 <= cooldown <= 86400:
+        raise ValueError("cooldown must be between 0 and 86400 seconds")
     return WatchRule(
         pattern=clean_pattern,
         color=clean_color,
         sgr=sgr,
         regex=compile_watch_pattern(clean_pattern),
+        sound=sound,
+        lcd=lcd,
+        cooldown=float(cooldown),
     )
 
 
@@ -82,7 +98,13 @@ def apply_watch_rules(line: str, rules: list[WatchRule]) -> str:
 def describe_watch_rules(rules: list[WatchRule]) -> str:
     if not rules:
         return "No watch rules"
-    return "Watches: " + ", ".join(f"{rule.pattern}={rule.color}" for rule in rules)
+    return "Watches: " + ", ".join(
+        f"{rule.pattern}={rule.color}"
+        + (f" sound={rule.sound}" if rule.sound else "")
+        + (f" lcd={rule.lcd}" if rule.lcd else "")
+        + (f" cooldown={rule.cooldown:g}s" if rule.sound or rule.lcd else "")
+        for rule in rules
+    )
 
 
 def parse_watch_arguments(argument: str) -> tuple[str, str]:
@@ -117,8 +139,18 @@ def parse_watch_arguments(argument: str) -> tuple[str, str]:
     return pattern, color
 
 
-def watch_rules_to_data(rules: list[WatchRule]) -> list[dict[str, str]]:
-    return [{"pattern": rule.pattern, "color": rule.color} for rule in rules]
+def watch_rules_to_data(rules: list[WatchRule]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for rule in rules:
+        item: dict[str, Any] = {"pattern": rule.pattern, "color": rule.color}
+        if rule.sound is not None:
+            item["sound"] = rule.sound
+        if rule.lcd is not None:
+            item["lcd"] = rule.lcd
+        if rule.sound or rule.lcd:
+            item["cooldown"] = rule.cooldown
+        result.append(item)
+    return result
 
 
 def watch_rules_from_data(data: Any) -> list[WatchRule]:
@@ -134,7 +166,14 @@ def watch_rules_from_data(data: Any) -> list[WatchRule]:
         color = item.get("color")
         if not isinstance(pattern, str) or not isinstance(color, str):
             raise ValueError(f"watch rule {index} must include string pattern and color")
-        rules.append(make_watch_rule(pattern, color))
+        sound = item.get("sound")
+        lcd = item.get("lcd")
+        cooldown = item.get("cooldown", DEFAULT_COOLDOWN)
+        if sound is not None and not isinstance(sound, str):
+            raise ValueError(f"watch rule {index}: sound must be a string")
+        if lcd is not None and not isinstance(lcd, str):
+            raise ValueError(f"watch rule {index}: lcd must be a string")
+        rules.append(make_watch_rule(pattern, color, sound=sound, lcd=lcd, cooldown=cooldown))
     return rules
 
 
@@ -385,6 +424,8 @@ class MudUi:
         self.profile_config_path: Path | None = None
         self.lock = threading.RLock()
         self.started = False
+        self.watch_bus = WatchEventBus()
+        self.character: str | None = None
         self.original_stdout_mode: int | None = None
         self._display_cache_width: int | None = None
         self._display_cache_rows: list[str] = []
@@ -409,6 +450,7 @@ class MudUi:
                     sys.stdout.write("\x1b[?1049l")
                 sys.stdout.flush()
             self.started = False
+            self.watch_bus.close()
             if self.original_stdout_mode is not None and os.name == "nt":
                 kernel32 = ctypes.windll.kernel32
                 handle = kernel32.GetStdHandle(-11)
@@ -428,6 +470,8 @@ class MudUi:
     def set_connected(self, value: bool) -> None:
         with self.lock:
             self.connected = value
+            if not value:
+                self.watch_bus.reset_partial()
             self.render()
 
     def set_secret_entry(self, value: bool) -> None:
@@ -457,8 +501,11 @@ class MudUi:
             self.modal_message = ""
             self.render()
 
-    def add_watch(self, pattern: str, color: str) -> WatchRule:
-        rule = make_watch_rule(pattern, color)
+    def add_watch(
+        self, pattern: str, color: str, *, sound: str | None = None,
+        lcd: str | None = None, cooldown: float = DEFAULT_COOLDOWN,
+    ) -> WatchRule:
+        rule = make_watch_rule(pattern, color, sound=sound, lcd=lcd, cooldown=cooldown)
         with self.lock:
             self.watch_rules = [existing for existing in self.watch_rules if existing.pattern != rule.pattern]
             self.watch_rules.append(rule)
@@ -502,12 +549,18 @@ class MudUi:
         with self.lock:
             return ("Enabled: " if self.watches_enabled else "Disabled: ") + describe_watch_rules(self.watch_rules)
 
-    def append_output(self, text: str) -> None:
+    def append_output(self, text: str, *, watch_events: bool = True) -> None:
         # Cap one received batch as well as retained lines. A long physical
         # line must not bypass max_scrollback (which counts lines only).
         text = _clip_ansi_line(text, MAX_SCROLLBACK_TOTAL_CHARS)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         with self.lock:
+            # Event detection happens on received logical lines, never on
+            # rendered rows or local confirmation messages.
+            if watch_events and self.watches_enabled and self.watch_rules:
+                self.watch_bus.feed(
+                    text, tuple(self.watch_rules), self.profile, self.character,
+                )
             parts = text.split("\n")
             for index, part in enumerate(parts):
                 if index > 0:
