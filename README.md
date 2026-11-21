@@ -331,8 +331,18 @@ On Windows, passwords are **reversibly encrypted with Windows DPAPI** in the
 existing `secrets.json` file, keyed by server hostname, port and character.
 Only character names (not passwords) appear in `profiles.json`. DPAPI
 decryption is tied to the current Windows user/machine, so copying files to
-another computer will not automatically recover credentials. On other
-platforms the password is prompted each time rather than saved insecurely.
+another computer will not automatically recover credentials.
+
+On Linux/macOS, the client uses Fernet encryption from the Python
+`cryptography` package to persist each character's password under
+`~/.aeon-mud/client/secrets.json`. The separate `secrets.key` and ciphertext
+file are created with mode 0600, under an owner-only (0700) directory.
+The key resides in the same Unix account: this protects against accidental
+disclosure or copying only `secrets.json`, **not** account compromise.
+The key must be backed up together with the encrypted secrets if migration
+is intended. The installed gway-001 Ansible role verifies `cryptography`
+is present. With no encryption backend available, character passwords are
+prompted each time rather than saved in plaintext.
 
 To replace or clear one character's saved password without affecting other
 characters, use:
@@ -343,7 +353,7 @@ characters, use:
 ```
 
 Omit `--password` to enter a replacement without exposing it in PowerShell
-history. After clearing, the next `--login Merlin` prompts again.
+history. After clearing, the next `--login Merlin` prompts again. The same `secret\nset/clear` commands work on Unix using `aeon-mud secret ...`.
 
 The login command is redacted from command history and transcripts, but
 **Telnet itself is unencrypted**: the server, network intermediaries, or

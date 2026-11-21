@@ -16,7 +16,7 @@
       - -c
       - |
         import sys
-        assert sys.version_info >= (3, 10), "Python 3.10 or newer is required"
+        assert sys.version_info >= (3, 10), "Python 3.10 or newer is required"\n        from cryptography.fernet import Fernet
   changed_when: false
 
 - name: Install immutable aeon-mud zipapp through owner deployment helper

@@ -5,6 +5,8 @@ import ctypes
 import json
 import os
 import re
+import stat
+import tempfile
 import sys
 from pathlib import Path
 from typing import Any
@@ -122,26 +124,125 @@ def set_connection_tab_title(profile: Profile, character: str | None = None) -> 
         sys.stdout.flush()
 
 
+def _unix_secret_key(path: Path, *, create: bool) -> bytes | None:
+    """Return an account-local Fernet key, refusing unsafe files and links.
+
+    This is file-at-rest protection, not a defense against an attacker with
+    access to the same Unix account (which holds both ciphertext and key).
+    """
+    folder = path.parent
+    if not folder.exists():
+        if not create:
+            return None
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if folder.is_symlink() or not folder.is_dir() or folder.stat().st_uid != os.getuid():
+        raise PermissionError("unsafe secret configuration directory")
+    folder.chmod(0o700)
+    key_path = folder / "secrets.key"
+    if create:
+        if path.exists() and not key_path.exists() and not key_path.is_symlink():
+            _unix_check_secret_file(path)
+            existing = load_json(path, {"secrets": {}}).get("secrets", {})
+            if existing:
+                raise RuntimeError("encrypted credentials exist but their key is missing")
+        from cryptography.fernet import Fernet
+        try:
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(Fernet.generate_key())
+    try:
+        fd = os.open(key_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise PermissionError("secret key must be an owner-only regular file (0600)")
+        key = handle.read(4096)
+    from cryptography.fernet import Fernet
+    Fernet(key)  # refuse malformed key rather than losing access to old tokens
+    return key
+
+
+def _unix_check_secret_file(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise PermissionError("secret file must be an owner-only regular file (0600)")
+
+
+def _unix_write_secrets(path: Path, data: dict[str, Any]) -> None:
+    """Replace secrets atomically with restrictive permissions from creation."""
+    _unix_check_secret_file(path)
+    fd, temporary = tempfile.mkstemp(prefix=".secrets-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 class SecretStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or secrets_path()
+        if os.name != "nt":
+            _unix_check_secret_file(self.path)
         self.data = load_json(self.path, {"secrets": {}})
         self.data.setdefault("secrets", {})
 
+    @staticmethod
+    def available() -> bool:
+        if Dpapi.available():
+            return True
+        try:
+            from cryptography.fernet import Fernet
+        except ImportError:
+            return False
+        return True
+
+    def _save(self) -> None:
+        if Dpapi.available():
+            save_json(self.path, self.data)
+        else:
+            _unix_secret_key(self.path, create=True)
+            _unix_write_secrets(self.path, self.data)
+
     def set_password(self, profile_name: str, password: str) -> None:
-        encrypted = Dpapi.protect(password.encode("utf-8"))
-        self.data["secrets"][profile_name] = base64.b64encode(encrypted).decode("ascii")
-        save_json(self.path, self.data)
+        if Dpapi.available():
+            encrypted = Dpapi.protect(password.encode("utf-8"))
+            token = base64.b64encode(encrypted).decode("ascii")
+        else:
+            from cryptography.fernet import Fernet
+            key = _unix_secret_key(self.path, create=True)
+            token = "fernet:" + Fernet(key).encrypt(password.encode("utf-8")).decode("ascii")
+        self.data["secrets"][profile_name] = token
+        self._save()
 
     def get_password(self, profile_name: str) -> str | None:
         encoded = self.data["secrets"].get(profile_name)
         if not encoded:
             return None
-        encrypted = base64.b64decode(encoded)
-        return Dpapi.unprotect(encrypted).decode("utf-8")
+        if Dpapi.available():
+            return Dpapi.unprotect(base64.b64decode(encoded)).decode("utf-8")
+        if not encoded.startswith("fernet:"):
+            raise ValueError("unsupported Unix secret format; no plaintext fallback")
+        from cryptography.fernet import Fernet
+        key = _unix_secret_key(self.path, create=False)
+        if key is None:
+            raise RuntimeError("Unix secret key is missing; refusing to overwrite encrypted credentials")
+        return Fernet(key).decrypt(encoded[len("fernet:"):].encode("ascii")).decode("utf-8")
 
     def clear_password(self, profile_name: str) -> None:
         self.data["secrets"].pop(profile_name, None)
-        save_json(self.path, self.data)
+        self._save()
 
 
