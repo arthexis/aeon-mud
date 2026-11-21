@@ -746,21 +746,26 @@ class MudUi:
         if self.modal_message:
             status = f" {self.modal_message}"
 
-        output = ["\x1b[?25l\x1b[H"]
+        # Unix KeyReader puts stdin in raw mode, which disables ONLCR.
+        # Bare LF no longer resets the output column, so line-by-line
+        # rendering must use absolute row/column positioning on *both*
+        # Windows and Unix. Addressing rows also avoids accumulating
+        # terminal auto-wrap state after full-width status/body rows.
+        output = ["\x1b[?25l"]
         if full_clear:
             output.append("\x1b[2J")
-        output.append("\x1b[7m" + truncate_plain(status, width).ljust(width) + "\x1b[0m")
-        output.append("\n")
 
-        for line in visible:
-            output.append("\x1b[2K" + truncate_ansi(line, width) + "\x1b[0m\n")
-        for _ in range(body_height - len(visible)):
-            output.append("\x1b[2K\n")
+        def draw_row(row_number: int, text: str) -> None:
+            output.append(f"\x1b[{row_number};1H\x1b[2K" + text)
+
+        draw_row(1, "\x1b[7m" + truncate_plain(status, width).ljust(width) + "\x1b[0m")
+        for index, line in enumerate(visible):
+            draw_row(index + 2, truncate_ansi(line, width) + "\x1b[0m")
+        for index in range(len(visible), body_height):
+            draw_row(index + 2, "")
 
         for index, row in enumerate(input_rows):
-            output.append("\x1b[2K" + truncate_plain(row, width))
-            if index < len(input_rows) - 1:
-                output.append("\n")
+            draw_row(body_height + index + 2, truncate_plain(row, width))
         cursor_line = 2 + body_height + input_cursor_row
         output.append(
             f"\x1b[{max(1, min(height, cursor_line))};{max(1, min(width, input_cursor_col))}H"
