@@ -443,6 +443,7 @@ def command_self_test(_args: argparse.Namespace) -> None:
                     self.connected = True
                     self.remembered: list[str] = []
                     self.watch_rules: list[WatchRule] = []
+                    self.watches_enabled = True
                     self.profile_config_path: Path | None = None
                     self.lines = [""]
                     self.lock = threading.RLock()
@@ -479,11 +480,14 @@ def command_self_test(_args: argparse.Namespace) -> None:
                 def replace_watches(self, rules: list[WatchRule]) -> None:
                     self.watch_rules = list(rules)
 
+                def set_watches_enabled(self, enabled: bool) -> None:
+                    self.watches_enabled = enabled
+
                 def describe_watches(self) -> str:
                     return describe_watch_rules(self.watch_rules)
 
             ui = FakeUi()
-            assert handle_local_command("/look", transcript, ui) is False
+            assert handle_local_command("/look", transcript, ui) is True
             assert handle_local_command("/watch You say cyan", transcript, ui) is True
             assert len(ui.watch_rules) == 1
             assert ui.watch_rules[0].pattern == "You say"
