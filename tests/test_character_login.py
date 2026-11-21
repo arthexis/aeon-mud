@@ -113,6 +113,43 @@ class CharacterLoginTests(unittest.TestCase):
                 self.assertEqual(prompt.call_count, 1)
                 self.assertEqual(transport.sendall.call_count, 2)
 
+    def test_unix_first_login_persists_and_second_reuses_character_password(self):
+        if security.os.name == "nt":
+            self.skipTest("Unix-only secret backend")
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = self.profile()
+            profile.require_private_host = False
+            path = Path(tmp) / "client" / "secrets.json"
+            store = profiles.ProfileStore(Path(tmp) / "profiles.json")
+            transport = mock.Mock()
+            with (
+                mock.patch.object(security.Dpapi, "available", return_value=False),
+                mock.patch.object(session, "SecretStore", side_effect=lambda: security.SecretStore(path)),
+                mock.patch.object(session.getpass, "getpass", return_value="unix-password") as prompt,
+                mock.patch.object(session, "open_session_transport",
+                                  return_value=(transport, telnet.TelnetCodec(), "ready")),
+                mock.patch.object(session, "run_sanity_checks"),
+                mock.patch.object(session, "KeyReader") as reader,
+                mock.patch.object(session, "MudUi"),
+                mock.patch.object(session, "Transcript"),
+                mock.patch.object(session.threading, "Thread") as thread,
+            ):
+                def start_worker(target, args=(), **kwargs):
+                    instance = mock.Mock()
+                    if target is session.send_character_login_after_ready:
+                        instance.start.side_effect = lambda: target(*args)
+                    return instance
+                thread.side_effect = start_worker
+                reader.return_value.read_key.return_value = keyboard.Key("quit")
+                args = self.args("--login", "Merlin")
+                session.session_loop(profile, args, on_connected=store.set)
+                self.assertEqual(prompt.call_count, 1)
+                self.assertEqual(security.SecretStore(path).get_password(
+                    security.character_secret_key(profile, "Merlin")), "unix-password")
+                session.session_loop(store.get(profile.name), args)
+                self.assertEqual(prompt.call_count, 1)
+                self.assertEqual(transport.sendall.call_count, 2)
+
     def test_secret_cli_manages_only_one_character(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile_store = profiles.ProfileStore(Path(tmp) / "profiles.json")
