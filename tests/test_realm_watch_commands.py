@@ -44,14 +44,16 @@ class RealmWatchTests(unittest.TestCase):
                 transcript = Mock()
                 controller = Mock()
                 controller.profile = profile
-                for command in ("/watch dragon", "/unwatch", "/help", "/nonsense"):
+                for command in ("//watch dragon", "//unwatch", "//help", "//nonsense"):
                     self.assertTrue(send_composed_input(command, False, transcript, ui, controller))
                 controller.send_line.assert_not_called()
                 self.assertEqual(load_realm_watches(profile), ([{"pattern": "dragon", "color": "yellow"}], False))
-                self.assertTrue(send_composed_input("/watch dragon --color blue", False, transcript, ui, controller))
+                self.assertTrue(send_composed_input("//watch dragon --color blue", False, transcript, ui, controller))
                 self.assertEqual(load_realm_watches(profile), ([{"pattern": "dragon", "color": "blue"}], True))
                 self.assertTrue(send_composed_input("look", False, transcript, ui, controller))
                 controller.send_line.assert_called_once_with("look", secret=False, remember=True)
+                self.assertTrue(send_composed_input("/look", False, transcript, ui, controller))
+                self.assertEqual(controller.send_line.call_args.args[0], "/look")
 
 
 if __name__ == "__main__":
