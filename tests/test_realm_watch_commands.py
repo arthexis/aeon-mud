@@ -11,10 +11,13 @@ from aeon_mud.commands import send_composed_input
 
 
 class RealmWatchTests(unittest.TestCase):
-    def test_pattern_matches_anywhere_and_preserves_wildcard(self):
-        rules = [make_watch_rule("dragon*attacks", "yellow")]
-        self.assertTrue(apply_watch_rules("A dragon suddenly attacks!", rules).startswith("\x1b[33m"))
-        self.assertEqual(apply_watch_rules("a peaceful meadow", rules), "a peaceful meadow")
+    def test_pattern_starts_line_by_default_and_search_opt_in(self):
+        anchored = [make_watch_rule("dragon*attacks", "yellow")]
+        self.assertTrue(apply_watch_rules("dragon suddenly attacks!", anchored).startswith("\x1b[33m"))
+        self.assertEqual(apply_watch_rules("A dragon suddenly attacks!", anchored), "A dragon suddenly attacks!")
+        anywhere = [make_watch_rule("dragon*attacks", "yellow", search=True)]
+        self.assertTrue(apply_watch_rules("A dragon suddenly attacks!", anywhere).startswith("\x1b[33m"))
+        self.assertEqual(apply_watch_rules("a peaceful meadow", anywhere), "a peaceful meadow")
 
     def test_optional_color_and_old_syntax(self):
         self.assertEqual(parse_watch_arguments("an important message"), ("an important message", "yellow"))

@@ -236,7 +236,7 @@ def handle_unwatch_command(line: str, transcript: Transcript, ui: MudUi) -> bool
     return True
 
 
-def parse_watch_with_actions(argument: str) -> tuple[str, str, str | None, str | None, float]:
+def parse_watch_with_actions(argument: str) -> tuple[str, str, str | None, str | None, float, bool, bool]:
     """Read optional actions, preserving legacy PATTERN and PATTERN COLOR."""
     try:
         tokens = shlex.split(argument)
@@ -245,12 +245,20 @@ def parse_watch_with_actions(argument: str) -> tuple[str, str, str | None, str |
     sound: str | None = None
     lcd: str | None = None
     cooldown = DEFAULT_COOLDOWN
+    search = False
+    use_regex = False
     color: str | None = None
     words: list[str] = []
     index = 0
     while index < len(tokens):
         token = tokens[index]
-        if token in ("--sound", "--lcd", "--cooldown", "--color"):
+        if token in ("--search", "--re"):
+            if token == "--search":
+                search = True
+            else:
+                use_regex = True
+            index += 1
+        elif token in ("--sound", "--lcd", "--cooldown", "--color"):
             if index + 1 >= len(tokens) or tokens[index + 1].startswith("--"):
                 raise ValueError(f"{token} requires a value")
             value = tokens[index + 1]
@@ -288,7 +296,7 @@ def parse_watch_with_actions(argument: str) -> tuple[str, str, str | None, str |
         inferred_color = color
     if not 0 <= cooldown <= 86400:
         raise ValueError("--cooldown requires seconds 0-86400")
-    return pattern, inferred_color, sound, lcd, cooldown
+    return pattern, inferred_color, sound, lcd, cooldown, search, use_regex
 
 
 def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
@@ -314,8 +322,9 @@ def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
         confirm_local_command(transcript, ui, f"Removed watch: {pattern}" if removed else f"No watch matched: {pattern}")
         return True
     try:
-        pattern, color, sound, lcd, cooldown = parse_watch_with_actions(argument)
-        rule = ui.add_watch(pattern, color, sound=sound, lcd=lcd, cooldown=cooldown)
+        pattern, color, sound, lcd, cooldown, search, use_regex = parse_watch_with_actions(argument)
+        rule = ui.add_watch(pattern, color, sound=sound, lcd=lcd, cooldown=cooldown,
+                            search=search, use_regex=use_regex)
         ui.set_watches_enabled(True)
         persist_watches(transcript, ui)
     except ValueError as exc:
@@ -323,6 +332,8 @@ def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     else:
         details = (f" sound={rule.sound}" if rule.sound else "")
         details += (f" lcd={rule.lcd}" if rule.lcd else "")
+        details += (" --search" if rule.search else "")
+        details += (" --re" if rule.use_regex else "")
         confirm_local_command(transcript, ui, f"Watching {rule.pattern} as {rule.color}{details}")
     return True
 
@@ -368,7 +379,7 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
         confirm_local_command(
             transcript, ui,
             "Local commands: //help, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
-            "[--lcd TEXT] [--cooldown SECONDS] (yellow default), "
+            "[--lcd TEXT] [--cooldown SECONDS] [--search] [--re] (yellow default), "
             "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE|off|status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."
         )

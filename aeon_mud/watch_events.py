@@ -96,7 +96,7 @@ class WatchEventBus:
                     continue
                 for rule in rules:
                     try:
-                        matched = rule.regex.search(clean) is not None
+                        matched = rule.matches(clean)
                     except (ValueError, re.error):
                         continue
                     if not matched:

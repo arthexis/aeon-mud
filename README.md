@@ -379,7 +379,7 @@ clears **only the active composer**; the other draft stays untouched.
 - `Ctrl+N`: insert a newline in the wrapped input composer
 - `Ctrl+V`: guarded paste into the active composer (multi-line confirmation retained)
 - `//log [file]`: start logging to `output.log` or to the named file
-- `//watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] [--lcd LABEL] [--cooldown SECONDS]`: highlight matching output and optionally deliver a local sound/LCD alert. Color defaults to yellow, sound cooldown to 5 seconds, and `*` matches any text. Use `//watch list` to inspect rules.
+- `//watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] [--lcd LABEL] [--cooldown SECONDS] [--search] [--re]`: highlight matching output and optionally deliver a local sound/LCD alert. Matches start at column 1 by default; `--search` searches anywhere in each line, `--re` treats PATTERN as a Python regex, and both flags can be combined. Without `--re`, `*` matches any text. Color defaults to yellow and sound cooldown to 5 seconds. Use `//watch list` to inspect rules.
 - `//unwatch`: disable highlighting without deleting saved rules; `//unwatch PATTERN` removes one rule. A new `//watch` re-enables highlighting.
 - `//help`: list all client-side slash commands
 - `//save file` / `//load [file]`: save and restore session profile settings
@@ -400,7 +400,9 @@ Examples to enter inside an aeon-mud session:
 
 ```text
 //watch "You have mail" --color cyan --sound email
-//watch "A dragon appears" --sound github.warning --lcd "DRAGON ALERT" --cooldown 30
+//watch "A dragon appears" --search --sound github.warning --lcd "DRAGON ALERT" --cooldown 30
+//watch "^You (have|received) mail" --re --sound email
+//watch "dragon.*attacks" --re --search --sound warning
 //watch "Your character is sleeping" --sound notice
 //watch list
 //unwatch "A dragon appears"
@@ -409,6 +411,8 @@ Examples to enter inside an aeon-mud session:
 `--sound notice` invokes the installed owner-level `gway-lcd-sound sound play notice`; `--sound github.warning` invokes `gway-lcd-sound sound play warning --motif github`. A motif is optional. The motif and sound names are validated as single identifiers (letters/digits/underscore/hyphen) and are **never** interpolated into a shell. The local command must be available in the session user's `PATH`; no action is sent to a remote machine or given privileged access. Motifs and sounds are validated by the installed sound provider at playback time.
 
 `--lcd "DRAGON ALERT"` shows a 15-second overlay with `MUD WATCH` on line 1 and the label shortened to 16 characters on line 2. Actions are dispatched only through the installed `gway-lcd-sound` user CLI, not direct I²C access. If the provider is missing or fails, the MUD stays connected; failures are reflected in bounded in-memory receipts.
+
+By default `//watch dragon` matches `dragon attacks` but not `A dragon attacks`. Add `--search` to find `dragon` anywhere in the line. Add `--re` to interpret regex constructs such as `^`, `.*`, and `(a|b)` rather than the default literal-with-`*` wildcard matching. `--re --search` is supported. These modes affect both color highlighting and sound/LCD event emission. Previously saved watch rules without these flags use the new anchored default; add `--search` to retain their former anywhere-in-line behavior.
 
 `--cooldown` is per realm and pattern (0–86400 seconds). The default 5-second interval prevents rapid duplicate alerts; `--cooldown 0` permits every matching completed line. Disabling watches with `//unwatch` also disables future event creation while keeping rules. Untrusted server text is **not** passed to the shell. This Stage A/B implementation provides local asynchronous events and the LCD/sound subscriber; it deliberately does not publish events to external webhooks or email recipients (future adapters must require explicit authorization and rate limits).
 
