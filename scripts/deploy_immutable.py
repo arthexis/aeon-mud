@@ -103,7 +103,8 @@ def install(source: Path, sha: str, root: Path, executable: Path) -> str:
     old = current.resolve(strict=True) if current.is_symlink() and current.exists() else None
     if old is not None and old.parent != releases:
         raise RuntimeError("existing current release escapes managed root")
-    if not executable.is_symlink():
+    executable_missing = not executable.is_symlink()
+    if executable_missing:
         replace_symlink(executable, expected_executable)
     if old != target:
         replace_symlink(current, target)
@@ -121,7 +122,7 @@ def install(source: Path, sha: str, root: Path, executable: Path) -> str:
     else:
         subprocess.run([str(executable), "--help"], check=True, timeout=30,
                        stdout=subprocess.DEVNULL)
-    return sha
+    return sha, old != target or executable_missing
 
 
 def main() -> int:
@@ -133,7 +134,8 @@ def main() -> int:
         parser.error("aeon-mud managed deployment is permitted on gway-001 only")
     root = Path.home() / ".local/share/aeon-mud"
     entry = Path.home() / ".local/bin/aeon-mud"
-    print("Installed aeon-mud " + install(args.source.resolve(), args.expected_sha, root, entry))
+    revision, changed = install(args.source.resolve(), args.expected_sha, root, entry)
+    print(("updated" if changed else "unchanged") + " aeon-mud " + revision)
     return 0
 
 
