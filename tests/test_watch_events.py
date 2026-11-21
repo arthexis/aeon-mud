@@ -124,6 +124,40 @@ class WatchEventTests(unittest.TestCase):
                 self.assertEqual(len(dispatched), int(expected))
                 bus.close()
 
+    def test_literal_triple_asterisks_and_escaped_wildcards(self):
+        literal = terminal.make_watch_rule("***", "red", sound="notice", cooldown=0)
+        for line, expected in (
+            ("*** MUD ALERT", True),
+            ("A *** MUD ALERT", False),
+            ("No stars here", False),
+            ("** two stars", False),
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(literal.matches(line), expected)
+                self.assertEqual(
+                    terminal.apply_watch_rules(line, [literal]).startswith("\x1b[31m"),
+                    expected,
+                )
+        self.assertTrue(terminal.make_watch_rule("*", "yellow").matches("anything"))
+        self.assertTrue(terminal.make_watch_rule("alert*now", "red").matches("alert right now"))
+        self.assertFalse(terminal.make_watch_rule("alert*now", "red").matches("other line"))
+        escaped = terminal.make_watch_rule(r"\*\*\*", "cyan")
+        self.assertTrue(escaped.matches("*** MUD ALERT"))
+        self.assertFalse(escaped.matches("Other text"))
+        # Escaping a sigil token also suppresses structured capture parsing.
+        escaped_sigil = terminal.make_watch_rule(r"\[target\]", "cyan")
+        self.assertTrue(escaped_sigil.matches("[target] is here"))
+        self.assertEqual(escaped_sigil.captures(escaped_sigil.match("[target] is here"))["named"], {})
+        matched = []
+        bus = watch_events.WatchEventBus(executor=lambda argv: matched.append(argv))
+        bus.feed("No stars\n*** watch this\n", (literal,), self.profile())
+        bus.pending.join()
+        self.assertEqual(len(matched), 1)
+        bus.close()
+        self.assertEqual(terminal.watch_rules_from_data(
+            terminal.watch_rules_to_data([literal])
+        )[0].matches("No stars"), False)
+
     def test_invalid_regex_rejected_cleanly(self):
         for pattern in ("[", "(", "*"):
             with self.subTest(pattern=pattern), self.assertRaisesRegex(ValueError, "invalid watch regex"):
@@ -214,7 +248,8 @@ class WatchEventTests(unittest.TestCase):
         bus.close()
 
     def test_action_dispatch_never_uses_shell_or_untrusted_message(self):
-        with mock.patch.object(watch_events.subprocess, "run") as run:
+        with mock.patch.object(watch_events.shutil, "which", return_value="/usr/bin/gway-lcd-sound"), \
+             mock.patch.object(watch_events.subprocess, "run") as run:
             watch_events._run_local(watch_events.sound_argv("mcp.notice"))
         argv = run.call_args.args[0]
         self.assertEqual(argv, ["gway-lcd-sound", "sound", "play", "notice", "--motif", "mcp"])

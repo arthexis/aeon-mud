@@ -114,15 +114,16 @@ def save_email_config(config: dict[str, Any], path: Path | None = None) -> None:
             os.unlink(temporary)
 
 
-def send_watch_email(event: dict[str, Any], config_path: Path | None = None) -> None:
+def send_watch_email(event: dict[str, Any], config_path: Path | None = None) -> bool:
+    """Return False when unavailable; no failure if the imported rule lacks local SMTP support."""
     config = load_email_config(config_path)
     if not config or not config.get("enabled", False):
-        raise RuntimeError("email notifications are not configured and enabled")
+        return False
     password = None
     if config.get("username"):
         password = os.environ.get(config["password_env"])
         if not password:
-            raise RuntimeError("SMTP password environment variable is unavailable")
+            return False
     msg = EmailMessage()
     msg["From"] = config["from"]
     msg["To"] = ", ".join(config["to"])
@@ -153,3 +154,4 @@ def send_watch_email(event: dict[str, Any], config_path: Path | None = None) -> 
             if config.get("username"):
                 server.login(config["username"], password)
             server.send_message(msg)
+    return True

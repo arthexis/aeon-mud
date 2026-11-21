@@ -418,7 +418,7 @@ By default `//watch dragon` matches `dragon attacks` but not `A dragon attacks`.
 
 ### Structured watch captures and offline email notification
 
-Without `--re`, each `[sigil]` identifier (letters, digits and underscores, starting with a letter or underscore) captures the corresponding variable text. For example, `//watch "You receive [item] from [sender]." --email` produces `captures.named.item` and `captures.named.sender`. A capture at the end of the pattern consumes the remaining line. Existing `*` wildcards still work, but do not capture values. Duplicate sigil names are rejected. A sigil capture takes precedence over a literal square-bracket phrase that matches the sigil grammar; to match brackets literally, use `--re` and escape them.
+Without `--re`, `*` is a wildcard, but three consecutive asterisks (`***`) match three literal asterisks instead of every line. For explicit literal asterisks in other patterns, escape them as `\*` (e.g., `"\*\*\*"`); use `--re` for regex quantifiers. Each `[sigil]` identifier (letters, digits and underscores, starting with a letter or underscore) captures the corresponding variable text. For example, `//watch "You receive [item] from [sender]." --email` produces `captures.named.item` and `captures.named.sender`. A capture at the end of the pattern consumes the remaining line. Existing `*` wildcards still work, but do not capture values. Duplicate sigil names are rejected. A sigil capture takes precedence over a literal square-bracket phrase that matches the sigil grammar; to match brackets literally, use `--re` and escape them.
 
 With `--re`, Python regular-expression groups are used **instead of sigils**. Numbered captures are in `captures.groups` and named regex groups additionally appear in `captures.named`. Every event contains `schema`, `event_id`, `timestamp`, `realm`, `character`, `pattern`, `message`, and `captures`. All fields are bounded to the existing logical-line length; secret login commands remain excluded.
 
@@ -434,6 +434,23 @@ The client saves recipients and SMTP routing to `~/.aeon-mud/client/notify_email
 
 `--cooldown` is per realm and pattern (0–86400 seconds). The default 5-second interval prevents rapid duplicate alerts; `--cooldown 0` permits every matching completed line. Disabling watches with `//unwatch` also disables future event creation while keeping rules. Untrusted server text is **not** passed to the shell. This implementation provides local asynchronous sound/LCD actions and opt-in TLS SMTP email delivery. External webhook publishing is not enabled.
 
+
+### Portable realm watch files
+
+Realm watches can be transferred between computers without copying private credentials, SMTP configuration, or the rest of the client profile:
+
+```bash
+aeon-mud realm export realm-watches.json
+aeon-mud realm export one-realm.json --realm mud.example:4000
+aeon-mud realm import realm-watches.json
+aeon-mud realm import realm-watches.json --replace
+```
+
+Export creates a **versioned JSON file**, containing the enabled state and saved watch rules for all realms by default. `--realm HOST:PORT` restricts export to a specific normalized endpoint. Export refuses to overwrite an existing file.
+
+Import validates the entire file (patterns, sigils, regexes, notification flags, colors and limits) before writing anything. By default it **merges** imported endpoints into the local realm store, replacing only corresponding endpoint entries and preserving unrelated realms. `--replace` replaces the complete local realm-watch collection. The import is atomic and does not require that email, LCD, or sound be installed.
+
+Imported rules retain `--email`, `--sound` and `--lcd` actions. On systems without `gway-lcd-sound`, sound/LCD actions silently do nothing; email without enabled local SMTP configuration or its required password environment variable also silently does nothing. Pattern matching, highlighting, captures and other actions continue to work. When providers are configured later, the saved actions become effective without re-importing. Neither the SMTP settings nor passwords are exported, so configure email separately on the destination.
 
 ## Transport Notes
 

@@ -41,6 +41,7 @@ from aeon_mud.config import *
 from aeon_mud.profiles import *
 from aeon_mud.security import *
 from aeon_mud.notify_email import email_config_path, load_email_config, save_email_config
+from aeon_mud.realm_transfer import export_realms, import_realms
 from aeon_mud.terminal_text import *
 from aeon_mud.telnet import *
 from aeon_mud.transport import *
@@ -249,6 +250,17 @@ def command_secret_clear(args: argparse.Namespace) -> None:
     SecretStore().clear_password(args.profile)
     print(f"Cleared password for {args.profile}")
 
+
+
+def command_realm_export(args: argparse.Namespace) -> None:
+    count = export_realms(Path(args.file), realm=args.realm)
+    print(f"Exported {count} realm(s) to {args.file}")
+
+
+def command_realm_import(args: argparse.Namespace) -> None:
+    count = import_realms(Path(args.file), replace=args.replace)
+    print(f"Imported {count} realm(s) from {args.file}; existing realm entries "
+          + ("replaced" if args.replace else "merged"))
 
 
 def command_notify_email_configure(args: argparse.Namespace) -> None:
@@ -707,6 +719,18 @@ def build_parser() -> argparse.ArgumentParser:
     secret_clear.add_argument("profile")
     secret_clear.add_argument("--character", help="clear only this character's password")
     secret_clear.set_defaults(func=command_secret_clear)
+
+    realm = subparsers.add_parser("realm", help="export/import portable realm watch rules")
+    realm_sub = realm.add_subparsers(dest="realm_command", required=True)
+    realm_export = realm_sub.add_parser("export", help="export all realms, or a single host:port, to JSON")
+    realm_export.add_argument("file")
+    realm_export.add_argument("--realm", help="export only this normalized HOST:PORT")
+    realm_export.set_defaults(func=command_realm_export)
+    realm_import = realm_sub.add_parser("import", help="import realm watch rules from JSON")
+    realm_import.add_argument("file")
+    realm_import.add_argument("--replace", action="store_true",
+                              help="replace all local realm watch settings instead of merging")
+    realm_import.set_defaults(func=command_realm_import)
 
     notify = subparsers.add_parser("notify", help="configure offline watch notifications")
     notify_sub = notify.add_subparsers(dest="notify_command", required=True)

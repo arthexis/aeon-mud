@@ -40,8 +40,17 @@ class EmailNotificationTests(unittest.TestCase):
             config = email.load_email_config(path)
             config["enabled"] = False
             email.save_email_config(config, path)
-            with self.assertRaisesRegex(RuntimeError, "not configured and enabled"):
-                email.send_watch_email(self.event(), path)
+            self.assertFalse(email.send_watch_email(self.event(), path))
+
+    def test_missing_configuration_and_password_are_silent_noops(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "notify_email.json"
+            with mock.patch.object(email.smtplib, "SMTP_SSL") as smtp:
+                self.assertFalse(email.send_watch_email(self.event(), path))
+                email.save_email_config(self.config(), path)
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    self.assertFalse(email.send_watch_email(self.event(), path))
+                smtp.assert_not_called()
 
     def test_invalid_config_fails_without_network(self):
         invalid = [
