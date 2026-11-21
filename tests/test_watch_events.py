@@ -34,6 +34,8 @@ class WatchEventTests(unittest.TestCase):
                          ("You have mail", "cyan", "github.notice", "NEW MAIL", 30))
         self.assertEqual(commands.parse_watch_with_actions('dragon red'),
                          ("dragon", "red", None, None, 5))
+        self.assertEqual(commands.parse_watch_with_actions('"danger red" --sound notice'),
+                         ("danger red", "yellow", "notice", None, 5))
         self.assertEqual(commands.parse_watch_with_actions('"dragon appears" --sound attention'),
                          ("dragon appears", "yellow", "attention", None, 5))
         for item in ("x --sound", "x --sound a.b.c", "x --cooldown nan",
