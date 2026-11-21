@@ -214,7 +214,8 @@ class WatchEventTests(unittest.TestCase):
         bus.close()
 
     def test_action_dispatch_never_uses_shell_or_untrusted_message(self):
-        with mock.patch.object(watch_events.subprocess, "run") as run:
+        with mock.patch.object(watch_events.shutil, "which", return_value="/usr/bin/gway-lcd-sound"), \
+             mock.patch.object(watch_events.subprocess, "run") as run:
             watch_events._run_local(watch_events.sound_argv("mcp.notice"))
         argv = run.call_args.args[0]
         self.assertEqual(argv, ["gway-lcd-sound", "sound", "play", "notice", "--motif", "mcp"])
