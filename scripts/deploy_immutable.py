@@ -32,7 +32,7 @@ def assert_source(source: Path, expected_sha: str) -> str:
     if source_revision(source) != expected:
         raise ValueError("source revision differs from authorized SHA")
     dirty = subprocess.check_output(
-        ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=no"],
+        ["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"],
         text=True, timeout=20,
     )
     if dirty.strip():
@@ -63,6 +63,8 @@ def install(source: Path, sha: str, root: Path, executable: Path) -> str:
     artifact = target / "aeon-mud.pyz"
     expected_executable = root / "current" / "aeon-mud.pyz"
 
+    if (source / "aeon_mud").is_symlink() or (source / "aeon_mud_client.py").is_symlink():
+        raise RuntimeError("source package must not be symlinked")
     if root.is_symlink() or releases.is_symlink() or target.is_symlink():
         raise RuntimeError("managed release root must not be a symlink")
     if current.exists() and not current.is_symlink():
@@ -116,6 +118,8 @@ def install(source: Path, sha: str, root: Path, executable: Path) -> str:
                 replace_symlink(current, old)
             else:
                 current.unlink(missing_ok=True)
+                if executable_missing and executable.is_symlink():
+                    executable.unlink()
             raise
         if old is not None:
             replace_symlink(previous, old)
