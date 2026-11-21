@@ -1,4 +1,4 @@
-"""Local slash commands, session settings and input submission."""
+"""Local double-slash commands, session settings and input submission."""
 from __future__ import annotations
 import re
 import time
@@ -220,9 +220,9 @@ def persist_watches(transcript: Transcript, ui: MudUi) -> None:
 
 
 def handle_unwatch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
-    if line != "/unwatch" and not line.startswith("/unwatch "):
+    if line != "//unwatch" and not line.startswith( "//unwatch"):
         return False
-    argument = strip_outer_quotes(line[len("/unwatch"):].strip())
+    argument = strip_outer_quotes(line[len("//unwatch"):].strip())
     if argument:
         removed = ui.remove_watch(argument)
         confirm_local_command(transcript, ui,
@@ -235,9 +235,9 @@ def handle_unwatch_command(line: str, transcript: Transcript, ui: MudUi) -> bool
 
 
 def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
-    if line != "/watch" and not line.startswith("/watch "):
+    if line != "//watch" and not line.startswith( "//watch"):
         return False
-    argument = line[6:].strip()
+    argument = line[len("//watch"):].strip()
     lowered = argument.lower()
     if not argument or lowered in {"list", "status", "?"}:
         confirm_local_command(transcript, ui, ui.describe_watches())
@@ -269,12 +269,12 @@ def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
 
 
 def handle_session_profile_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
-    if line != "/save" and not line.startswith("/save ") and line != "/load" and not line.startswith("/load "):
+    if line != "//save" and not line.startswith( "//save") and line != "//load" and not line.startswith( "//load"):
         return False
-    if line == "/save" or line.startswith("/save "):
-        argument = line[5:].strip()
+    if line == "//save" or line.startswith( "//save"):
+        argument = line[len("//save"):].strip()
         if not argument:
-            confirm_local_command(transcript, ui, "Save error: usage: /save file")
+            confirm_local_command(transcript, ui, "Save error: usage: //save file")
             return True
         try:
             path = resolve_session_profile_path(argument)
@@ -286,13 +286,13 @@ def handle_session_profile_command(line: str, transcript: Transcript, ui: MudUi)
             confirm_local_command(transcript, ui, f"Saved profile: {path}")
         return True
     try:
-        argument = line[5:].strip()
+        argument = line[len("//load"):].strip()
         if argument:
             path = resolve_session_profile_path(argument)
         elif ui.profile_config_path is not None:
             path = ui.profile_config_path
         else:
-            confirm_local_command(transcript, ui, "Load error: usage: /load file")
+            confirm_local_command(transcript, ui, "Load error: usage: //load file")
             return True
         data = load_session_profile(path)
         apply_session_profile(data, ui.profile, transcript, ui)
@@ -305,26 +305,28 @@ def handle_session_profile_command(line: str, transcript: Transcript, ui: MudUi)
 
 
 def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
-    if line == "/help":
+    if line == "//help":
         confirm_local_command(
             transcript, ui,
-            "Local commands: /help, /watch PATTERN [--color COLOR] (yellow default), "
-            "/watch list, /unwatch [PATTERN], /watch clear, /log [FILE|off|status], "
-            "/save FILE, /load [FILE]. Watches persist per host:port."
+            "Local commands: //help, //watch PATTERN [--color COLOR] (yellow default), "
+            "/watch list, //unwatch [PATTERN], //watch clear, //log [FILE|off|status], "
+            "/save FILE, //load [FILE]. Watches persist per host:port."
         )
         return True
+    if not line.startswith("//"):
+        return False
     if handle_unwatch_command(line, transcript, ui):
         return True
     if handle_watch_command(line, transcript, ui):
         return True
     if handle_session_profile_command(line, transcript, ui):
         return True
-    if line != "/log" and not line.startswith("/log "):
-        if line.startswith("/"):
-            confirm_local_command(transcript, ui, f"Unknown local command: {line.split()[0]}. Use /help")
+    if line != "//log" and not line.startswith( "//log"):
+        if line.startswith("//"):
+            confirm_local_command(transcript, ui, f"Unknown local command: {line.split()[0]}. Use //help")
             return True
         return False
-    argument = line[4:].strip()
+    argument = line[len("//log"):].strip()
     lowered = argument.lower()
     if lowered in {"off", "stop", "close"}:
         if transcript.path:
