@@ -141,7 +141,10 @@ def _unix_secret_key(path: Path, *, create: bool) -> bytes | None:
     key_path = folder / "secrets.key"
     if create:
         if path.exists() and not key_path.exists() and not key_path.is_symlink():
-            raise RuntimeError("encrypted credentials exist but their key is missing")
+            _unix_check_secret_file(path)
+            existing = load_json(path, {"secrets": {}}).get("secrets", {})
+            if existing:
+                raise RuntimeError("encrypted credentials exist but their key is missing")
         from cryptography.fernet import Fernet
         try:
             fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
