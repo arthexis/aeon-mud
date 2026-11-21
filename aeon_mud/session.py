@@ -545,7 +545,7 @@ def session_loop(
     set_connection_tab_title(profile, character)
     if character is not None:
         key = character_secret_key(profile, character)
-        if Dpapi.available():
+        if SecretStore.available():
             character_password = SecretStore().get_password(key)
         if character_password is None:
             character_password = getpass.getpass(f"Password for {character} on {profile.host}: ")
@@ -570,8 +570,8 @@ def session_loop(
         if character is not None:
             if character not in profile.characters:
                 profile.characters.append(character)
-            if Dpapi.available():
-                # Persist a reversible Windows-user-bound encrypted secret.
+            if SecretStore.available():
+                # Persist via Windows DPAPI or the owner-only Unix Fernet vault.
                 SecretStore().set_password(character_secret_key(profile, character), character_password)
         if on_connected is not None:
             on_connected(profile)
