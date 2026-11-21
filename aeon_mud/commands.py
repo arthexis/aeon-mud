@@ -1,6 +1,7 @@
 """Local double-slash commands, session settings and input submission."""
 from __future__ import annotations
 import re
+import shlex
 import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -10,6 +11,7 @@ from .input import KeyReader
 from .terminal import *
 from .transcript import Transcript
 from .realm_watches import save_realm_watches
+from .watch_events import DEFAULT_COOLDOWN, parse_sound, lcd_argv
 
 if TYPE_CHECKING:
     from .session import SessionController
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
 def append_client_event(transcript: Transcript, ui: MudUi, message: str) -> None:
     plain = f"[client] {message}\n"
     transcript.write("recv", plain)
-    ui.append_output(f"\x1b[33m{plain}\x1b[0m")
+    ui.append_output(f"\x1b[33m{plain}\x1b[0m", watch_events=False)
 
 
 def confirm_local_command(transcript: Transcript, ui: MudUi, message: str) -> None:
@@ -234,6 +236,62 @@ def handle_unwatch_command(line: str, transcript: Transcript, ui: MudUi) -> bool
     return True
 
 
+def parse_watch_with_actions(argument: str) -> tuple[str, str, str | None, str | None, float]:
+    """Read optional actions, preserving legacy PATTERN and PATTERN COLOR."""
+    try:
+        tokens = shlex.split(argument)
+    except ValueError as exc:
+        raise ValueError(f"invalid quotes: {exc}") from exc
+    sound: str | None = None
+    lcd: str | None = None
+    cooldown = DEFAULT_COOLDOWN
+    color: str | None = None
+    words: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in ("--sound", "--lcd", "--cooldown", "--color"):
+            if index + 1 >= len(tokens) or tokens[index + 1].startswith("--"):
+                raise ValueError(f"{token} requires a value")
+            value = tokens[index + 1]
+            if token == "--sound":
+                parse_sound(value)
+                sound = value
+            elif token == "--lcd":
+                lcd_argv(value)
+                lcd = value
+            elif token == "--color":
+                resolve_watch_color(value)
+                color = value
+            else:
+                try:
+                    cooldown = float(value)
+                except ValueError as exc:
+                    raise ValueError("--cooldown requires seconds 0-86400") from exc
+            index += 2
+        elif token.startswith("--"):
+            raise ValueError(f"unknown watch option: {token}")
+        else:
+            words.append(token)
+            index += 1
+    if not words:
+        raise ValueError("pattern must not be empty")
+    pattern, inferred_color = parse_watch_arguments(" ".join(words))
+    if color is not None:
+        # Explicit --color always wins over positional legacy color.
+        if len(words) > 1:
+            try:
+                resolve_watch_color(words[-1])
+            except ValueError:
+                pass
+            else:
+                pattern = " ".join(words[:-1])
+        inferred_color = color
+    if not 0 <= cooldown <= 86400:
+        raise ValueError("--cooldown requires seconds 0-86400")
+    return pattern, inferred_color, sound, lcd, cooldown
+
+
 def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line != "//watch" and not line.startswith("//watch "):
         return False
@@ -257,14 +315,16 @@ def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
         confirm_local_command(transcript, ui, f"Removed watch: {pattern}" if removed else f"No watch matched: {pattern}")
         return True
     try:
-        pattern, color = parse_watch_arguments(argument)
-        rule = ui.add_watch(pattern, color)
+        pattern, color, sound, lcd, cooldown = parse_watch_with_actions(argument)
+        rule = ui.add_watch(pattern, color, sound=sound, lcd=lcd, cooldown=cooldown)
         ui.set_watches_enabled(True)
         persist_watches(transcript, ui)
     except ValueError as exc:
         confirm_local_command(transcript, ui, f"Watch error: {exc}")
     else:
-        confirm_local_command(transcript, ui, f"Watching {rule.pattern} as {rule.color}")
+        details = (f" sound={rule.sound}" if rule.sound else "")
+        details += (f" lcd={rule.lcd}" if rule.lcd else "")
+        confirm_local_command(transcript, ui, f"Watching {rule.pattern} as {rule.color}{details}")
     return True
 
 
@@ -308,7 +368,8 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line == "//help":
         confirm_local_command(
             transcript, ui,
-            "Local commands: //help, //watch PATTERN [--color COLOR] (yellow default), "
+            "Local commands: //help, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
+            "[--lcd TEXT] [--cooldown SECONDS] (yellow default), "
             "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE|off|status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."
         )
