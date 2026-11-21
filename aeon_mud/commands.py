@@ -1,4 +1,4 @@
-"""Local slash commands, session settings and input submission."""
+"""Local double-slash commands, session settings and input submission."""
 from __future__ import annotations
 import re
 import time
@@ -9,6 +9,7 @@ from .profiles import Profile
 from .input import KeyReader
 from .terminal import *
 from .transcript import Transcript
+from .realm_watches import save_realm_watches
 
 if TYPE_CHECKING:
     from .session import SessionController
@@ -140,6 +141,7 @@ def apply_session_profile(data: dict[str, Any], profile: Profile, transcript: "T
         if len(ui.lines) > profile.max_scrollback:
             ui.lines = ui.lines[-profile.max_scrollback :]
     ui.replace_watches(rules)
+    persist_watches(transcript, ui)
 
 
 def get_clipboard_text() -> str | None:
@@ -196,7 +198,8 @@ def handle_paste(ui: MudUi, controller: SessionController) -> None:
         to_send = (prefix + line) if first else line
         first = False
         try:
-            controller.send_line(to_send, secret=False, remember=True)
+            if not handle_local_command(to_send, controller.transcript, ui):
+                controller.send_line(to_send, secret=False, remember=True)
         except OSError as exc:
             remaining = [to_send] + lines[index + 1 :]
             ui.replace_input("\n".join(remaining))
@@ -206,16 +209,42 @@ def handle_paste(ui: MudUi, controller: SessionController) -> None:
     ui.set_status(f"Pasted {len(lines)} lines")
 
 
-def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
-    if line != "/watch" and not line.startswith("/watch "):
+def persist_watches(transcript: Transcript, ui: MudUi) -> None:
+    with ui.lock:
+        rules = watch_rules_to_data(ui.watch_rules)
+        enabled = ui.watches_enabled
+    try:
+        save_realm_watches(ui.profile, rules, enabled)
+    except (OSError, ValueError) as exc:
+        confirm_local_command(transcript, ui, f"Watch persistence error: {exc}")
+
+
+def handle_unwatch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
+    if line != "//unwatch" and not line.startswith("//unwatch "):
         return False
-    argument = line[6:].strip()
+    argument = strip_outer_quotes(line[len("//unwatch"):].strip())
+    if argument:
+        removed = ui.remove_watch(argument)
+        confirm_local_command(transcript, ui,
+                              f"Removed watch: {argument}" if removed else f"No watch matched: {argument}")
+    else:
+        ui.set_watches_enabled(False)
+        confirm_local_command(transcript, ui, "Watch highlighting disabled (rules retained)")
+    persist_watches(transcript, ui)
+    return True
+
+
+def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
+    if line != "//watch" and not line.startswith("//watch "):
+        return False
+    argument = line[len("//watch"):].strip()
     lowered = argument.lower()
     if not argument or lowered in {"list", "status", "?"}:
         confirm_local_command(transcript, ui, ui.describe_watches())
         return True
     if lowered in {"clear", "off"}:
         removed = ui.clear_watches()
+        persist_watches(transcript, ui)
         confirm_local_command(transcript, ui, f"Cleared {removed} watch rule" + ("" if removed == 1 else "s"))
         return True
     if lowered.startswith("remove "):
@@ -224,11 +253,14 @@ def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
             confirm_local_command(transcript, ui, "Watch error: pattern must not be empty")
             return True
         removed = ui.remove_watch(pattern)
+        persist_watches(transcript, ui)
         confirm_local_command(transcript, ui, f"Removed watch: {pattern}" if removed else f"No watch matched: {pattern}")
         return True
     try:
         pattern, color = parse_watch_arguments(argument)
         rule = ui.add_watch(pattern, color)
+        ui.set_watches_enabled(True)
+        persist_watches(transcript, ui)
     except ValueError as exc:
         confirm_local_command(transcript, ui, f"Watch error: {exc}")
     else:
@@ -237,12 +269,12 @@ def handle_watch_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
 
 
 def handle_session_profile_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
-    if line != "/save" and not line.startswith("/save ") and line != "/load" and not line.startswith("/load "):
+    if line != "//save" and not line.startswith("//save ") and line != "//load" and not line.startswith("//load "):
         return False
-    if line == "/save" or line.startswith("/save "):
-        argument = line[5:].strip()
+    if line == "//save" or line.startswith("//save "):
+        argument = line[len("//save"):].strip()
         if not argument:
-            confirm_local_command(transcript, ui, "Save error: usage: /save file")
+            confirm_local_command(transcript, ui, "Save error: usage: //save file")
             return True
         try:
             path = resolve_session_profile_path(argument)
@@ -254,13 +286,13 @@ def handle_session_profile_command(line: str, transcript: Transcript, ui: MudUi)
             confirm_local_command(transcript, ui, f"Saved profile: {path}")
         return True
     try:
-        argument = line[5:].strip()
+        argument = line[len("//load"):].strip()
         if argument:
             path = resolve_session_profile_path(argument)
         elif ui.profile_config_path is not None:
             path = ui.profile_config_path
         else:
-            confirm_local_command(transcript, ui, "Load error: usage: /load file")
+            confirm_local_command(transcript, ui, "Load error: usage: //load file")
             return True
         data = load_session_profile(path)
         apply_session_profile(data, ui.profile, transcript, ui)
@@ -273,13 +305,28 @@ def handle_session_profile_command(line: str, transcript: Transcript, ui: MudUi)
 
 
 def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
+    if line == "//help":
+        confirm_local_command(
+            transcript, ui,
+            "Local commands: //help, //watch PATTERN [--color COLOR] (yellow default), "
+            "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE|off|status], "
+            "//save FILE, //load [FILE]. Watches persist per host:port."
+        )
+        return True
+    if not line.startswith("//"):
+        return False
+    if handle_unwatch_command(line, transcript, ui):
+        return True
     if handle_watch_command(line, transcript, ui):
         return True
     if handle_session_profile_command(line, transcript, ui):
         return True
-    if line != "/log" and not line.startswith("/log "):
+    if line != "//log" and not line.startswith("//log "):
+        if line.startswith("//"):
+            confirm_local_command(transcript, ui, f"Unknown local command: {line.split()[0]}. Use //help")
+            return True
         return False
-    argument = line[4:].strip()
+    argument = line[len("//log"):].strip()
     lowered = argument.lower()
     if lowered in {"off", "stop", "close"}:
         if transcript.path:

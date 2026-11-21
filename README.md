@@ -317,17 +317,19 @@ clears **only the active composer**; the other draft stays untouched.
 - `Ctrl+Up` / `Ctrl+Down`: command history
 - `Ctrl+N`: insert a newline in the wrapped input composer
 - `Ctrl+V`: guarded paste into the active composer (multi-line confirmation retained)
-- `/log [file]`: start logging to `output.log` or to the named file
-- `/watch pattern color`: colorize messages that start with `pattern`; `*` is a wildcard
-- `/save file` / `/load [file]`: save and restore session profile settings
+- `//log [file]`: start logging to `output.log` or to the named file
+- `//watch PATTERN [--color COLOR]`: highlight received lines containing `PATTERN` (yellow by default); `*` matches any text. Use `//watch list` to inspect rules.
+- `//unwatch`: disable highlighting without deleting saved rules; `//unwatch PATTERN` removes one rule. A new `//watch` re-enables highlighting.
+- `//help`: list all client-side slash commands
+- `//save file` / `//load [file]`: save and restore session profile settings
 - `Ctrl+]`: quit
 - `F2`: show log path
 - `F3`: repeat last command
 - `F4`: jump to bottom
 - `F5`: show key help
 
-Local slash commands are handled by the client and are not sent to the MUD.
-Logging is opt-in; the client does not write session logs unless `/log` is used.
+Local commands start with `//` and are never forwarded to the MUD, including unknown `//` commands. Single-slash (`/`) input is sent to the server as normal. Watch rules and their enabled state are saved automatically in `realm_watches.json` per normalized `host:port`, shared by all character profiles connecting to that endpoint.
+Logging is opt-in; the client does not write session logs unless `//log` is used.
 
 ## Transport Notes
 
