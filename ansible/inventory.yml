@@ -1,0 +1,7 @@
+# No remote addresses, credentials or elevated identities. Only the local controller.
+all:
+  children:
+    aeon_mud_managed:
+      hosts:
+        gway-001:
+          ansible_connection: local
