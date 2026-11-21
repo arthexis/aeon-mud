@@ -53,7 +53,7 @@ class OwnerDeployTests(unittest.TestCase):
             (source / "aeon_mud").mkdir(parents=True)
             (source / "aeon_mud" / "__init__.py").write_text("")
             (source / "aeon_mud" / "cli.py").write_text(
-                "def main():\\n    return 0\\n".replace("\\\\n", "\\n"), encoding="utf-8")
+                "def main():\n    return 0\n", encoding="utf-8")
             (source / "aeon_mud_client.py").write_text("# compatibility")
             root = home / "share"
             entry = home / "bin" / "aeon-mud"
