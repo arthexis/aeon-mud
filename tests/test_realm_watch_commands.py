@@ -47,6 +47,9 @@ class RealmWatchTests(unittest.TestCase):
                 for command in ("//watch dragon", "//unwatch", "//help", "//nonsense"):
                     self.assertTrue(send_composed_input(command, False, transcript, ui, controller))
                 controller.send_line.assert_not_called()
+                for unknown in ("//watchdog", "//logger", "//savepoint", "//", "//unknown arg"):
+                    self.assertTrue(send_composed_input(unknown, False, transcript, ui, controller))
+                controller.send_line.assert_not_called()
                 self.assertEqual(load_realm_watches(profile), ([{"pattern": "dragon", "color": "yellow"}], False))
                 self.assertTrue(send_composed_input("//watch dragon --color blue", False, transcript, ui, controller))
                 self.assertEqual(load_realm_watches(profile), ([{"pattern": "dragon", "color": "blue"}], True))
