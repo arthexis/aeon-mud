@@ -99,7 +99,17 @@ def parse_watch_arguments(argument: str) -> tuple[str, str]:
     elif text.startswith("--color "):
         raise ValueError("pattern must not be empty")
     else:
-        pattern = text
+        # Compatibility with the previous /watch PATTERN COLOR syntax.
+        parts = text.rsplit(None, 1)
+        if len(parts) == 2:
+            try:
+                resolve_watch_color(parts[1])
+            except ValueError:
+                pattern = text
+            else:
+                pattern, color = parts
+        else:
+            pattern = text
     pattern = strip_outer_quotes(pattern)
     if not pattern:
         raise ValueError("pattern must not be empty")
