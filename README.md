@@ -329,7 +329,7 @@ clears **only the active composer**; the other draft stays untouched.
 - `F5`: show key help
 
 Local commands start with `//` and are never forwarded to the MUD, including unknown `//` commands. Single-slash (`/`) input is sent to the server as normal. Watch rules and their enabled state are saved automatically in `realm_watches.json` per normalized `host:port`, shared by all character profiles connecting to that endpoint.
-Logging is opt-in; the client does not write session logs unless `/log` is used.
+Logging is opt-in; the client does not write session logs unless `//log` is used.
 
 ## Transport Notes
 
