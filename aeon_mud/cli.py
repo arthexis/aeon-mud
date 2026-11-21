@@ -457,7 +457,7 @@ def command_self_test(_args: argparse.Namespace) -> None:
                 def remember(self, line: str) -> None:
                     self.remembered.append(line)
 
-                def append_output(self, text: str) -> None:
+                def append_output(self, text: str, *, watch_events: bool = True) -> None:
                     self.lines.append(text)
 
                 def add_watch(self, pattern: str, color: str) -> WatchRule:
