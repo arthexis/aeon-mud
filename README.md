@@ -150,6 +150,36 @@ The `main` GitHub ruleset requires exactly one status check, **`CI`**
 (GitHub Actions). Do not require the diagnostic jobs individually. Keep the
 job name stable, since GitHub matches required check contexts by exact name.
 
+## Managed GWay Remote deployment (gway-001 only)
+
+The canonical installer is `deploy.sh`, backed by `ansible/playbook.yml`
+and the `aeon_mud` Ansible role. This is an opt-in, local-only CLI deployment,
+never a Telnet connection or a systemd service. It requires Python 3.10+,
+Ansible Core, Git, the installation user `arthe`, and a machine whose
+verified hostname is `gway-001`. All other nodes fail closed.
+
+From an exact, clean source checkout:
+
+```sh
+sh ./deploy.sh --expected-sha "$(git rev-parse HEAD)"
+```
+
+GWay Remote uses this command only after its own exact-main-SHA, CI and
+per-node deployment authorization checks. The owner installer independently
+verifies source SHA and a clean tracked tree, assembles a dependency-free
+zipapp, checks its `--help`, and atomically activates
+`~/.local/share/aeon-mud/current` with the last release in `previous`.
+The managed command is `~/.local/bin/aeon-mud`. An unrelated existing command
+is never overwritten. Release evidence is a full-SHA directory, verified
+through the active executable link, not an attempt journal. Running the
+same SHA is idempotent. No root privileges, daemon, external credentials,
+auto-login, system service, or SSH management are introduced.
+
+The repository and Ansible role are designed for gway-001 by default.
+Other fleet nodes remain unapproved; adding a node requires an explicit
+separate policy change and acceptance. A merged PR alone does not imply
+installation on the appliance.
+
 ## Tests
 
 The project uses standard-library `unittest` without additional test
