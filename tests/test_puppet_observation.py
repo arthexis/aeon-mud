@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from aeon_mud.puppet import PuppetServer, PuppetClient, main
+from aeon_mud.puppet import PuppetServer, PuppetClient, main, parse_duration
 from aeon_mud.puppet_journal import PuppetJournal
 from aeon_mud.profiles import Profile
 from aeon_mud.transcript import Transcript
@@ -56,6 +56,7 @@ class JournalTests(unittest.TestCase):
         transcript.write("recv", "second response")
         restored = PuppetJournal("Hero")
         output = restored.read(action_id=action["action_id"])
+        self.assertEqual(restored.read(last=True)["action_id"], action["action_id"])
         self.assertEqual([v["text"] for v in output["events"]], ["first response", "second response"])
         self.assertEqual(output["events"][0]["log_path"], str(first))
         self.assertEqual(output["events"][1]["log_path"], str(second))
@@ -103,6 +104,39 @@ class JournalTests(unittest.TestCase):
             journal.record("recv", str(index))
         with self.assertRaisesRegex(ValueError, "expired"):
             journal.read(after=0)
+
+
+    def test_encrypted_mode_remains_memory_only(self):
+        transcript = Transcript(Profile(name="demo", host="localhost"))
+        transcript.mode = "encrypted"
+        transcript.path = self.root / "encrypted.dpapi.jsonl"
+        journal = PuppetJournal("Hero")
+        transcript.observers.append(journal.record)
+        action = journal.start_action(["look"])
+        with mock.patch("aeon_mud.transcript.Dpapi.protect", return_value=b"ciphertext"):
+            transcript.write("recv", "private output")
+        result = journal.read(action_id=action["action_id"])
+        self.assertEqual(result["events"][0]["text"], "private output")
+        self.assertIsNone(result["events"][0]["log_path"])
+        self.assertFalse(journal.path.exists())
+
+    def test_until_next_action_responds_when_action_arrives(self):
+        journal = PuppetJournal("Hero")
+        first = journal.start_action(["look"])
+        outputs = []
+        reader = threading.Thread(target=lambda: outputs.append(
+            journal.read(action_id=first["action_id"], until_next=True, wait=1)))
+        reader.start()
+        time.sleep(.12)
+        journal.start_action(["north"])
+        reader.join(2)
+        self.assertFalse(reader.is_alive())
+        self.assertTrue(outputs[0]["complete"])
+
+    def test_human_readable_durations(self):
+        self.assertEqual(parse_duration("500ms"), .5)
+        self.assertEqual(parse_duration("2s"), 2)
+        self.assertEqual(parse_duration("0"), 0)
 
 
 @unittest.skipUnless(os.name == "posix", "Unix sockets only")
