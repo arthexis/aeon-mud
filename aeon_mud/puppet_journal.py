@@ -106,13 +106,15 @@ class PuppetJournal:
             self.changed.notify_all()
             return row
 
-    def start_action(self, commands: list[str], *, durable: bool = False, log_path=None):
+    def start_action(self, commands: list[str], *, durable: bool = False, log_path=None, origin="puppet", trigger_id=None, trigger_name=None, captures=None, matched_text=None):
         with self.changed:
             self.sequence += 1
             action = uuid.uuid4().hex
             row = {"kind": "action", "seq": self.sequence, "session_id": self.session_id,
                    "ts": datetime.now(timezone.utc).isoformat(), "action_id": action,
-                   "commands": commands, "log_path": str(log_path.absolute()) if log_path else None,
+                   "commands": commands, "origin": origin, "trigger_id": trigger_id, "trigger_name": trigger_name,
+                   "captures": captures, "matched_text": matched_text,
+                   "log_path": str(log_path.absolute()) if log_path else None,
                    "log_offset": log_path.stat().st_size if log_path is not None and log_path.exists() else None}
             self.actions[action] = row
             self.last_action = action
