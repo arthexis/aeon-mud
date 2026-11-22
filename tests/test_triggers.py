@@ -212,5 +212,26 @@ class TriggerTests(unittest.TestCase):
             duration("100s")
 
 
+    def test_gameplay_readiness_blocks_dispatch(self):
+        rule = self.engine.add("A warning", ["hide"])
+        self.engine.feed("A warning\n")
+        self.controller.trigger_ready = False
+        self.engine.drain(self.controller)
+        self.assertEqual(self.controller.sent, [])
+        self.assertEqual(rule.state, "spent")
+        self.controller.trigger_ready = True
+        self.engine.drain(self.controller)
+        self.assertEqual(self.controller.sent, ["hide"])
+
+    def test_disconnected_session_cancels_queued_responses(self):
+        rule = self.engine.add("A warning", ["hide"], persist=True)
+        self.engine.feed("A warning\n")
+        self.engine.on_disconnect()
+        self.engine.drain(self.controller)
+        self.assertEqual(self.controller.sent, [])
+        self.assertEqual(rule.receipt["status"], "failed")
+        self.assertEqual(TriggerEngine(self.profile, "Hero").status(rule.id)["state"], "spent")
+
+
 if __name__ == "__main__":
     unittest.main()
