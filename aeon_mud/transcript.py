@@ -76,6 +76,9 @@ class Transcript:
 
     def _notify(self, direction: str, text: str, secret: bool,
                 log_path: Path | None, log_offset: int | None = None) -> None:
+        # Never create a plaintext Puppet sidecar for encrypted transcripts.
+        if self.mode == "encrypted":
+            log_path, log_offset = None, None
         for observer in tuple(self.observers):
             observer(direction, text, secret=secret, log_path=log_path,
                      log_offset=log_offset)
