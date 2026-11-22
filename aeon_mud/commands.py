@@ -508,13 +508,18 @@ def send_composed_input(
                 elif controller.puppet is not None:
                     confirm_local_command(transcript, ui, f"Puppet already enabled: {controller.puppet.path}")
                 else:
+                    puppet = None
                     try:
                         puppet = PuppetServer(controller.character_login[0])
-                        puppet.start()
                         if isinstance(transcript, Transcript):
                             puppet.attach(transcript)
+                        puppet.start()
                         controller.puppet = puppet
                     except (OSError, RuntimeError, ValueError) as exc:
+                        if puppet is not None:
+                            if isinstance(transcript, Transcript):
+                                puppet.detach(transcript)
+                            puppet.close()
                         confirm_local_command(transcript, ui, f"Puppet error: {exc}")
                     else:
                         confirm_local_command(transcript, ui, f"Puppet enabled: {puppet.path}")
