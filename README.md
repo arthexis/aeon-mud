@@ -516,3 +516,19 @@ cannot be probed and reconnected transparently; explicit `tls` is rejected.
 TLS verification uses system trust roots and the destination hostname; no
 insecure-certificate bypass is provided. TLS over SOCKS5 is supported; TLS over
 `proxy_command` is not. This change does not extend the Rust prototype.
+
+### Text log lifecycle
+
+Only one text log destination is active in a session. `//log FILE` appends to
+the file and is idempotent when the same file is already selected. To change
+destinations, use `//log --switch OTHERFILE`.
+
+- `//log --persist` enables persistence on the existing active log;
+  `//log FILE --persist` also works when starting a new log.
+- `//log --status` prints the current destination and persistence status.
+- `//log --stop` or `//log --off` stops logging and cancels persistence.
+  An optional filename must match the currently active log.
+
+Persistent text logs resume automatically on subsequent launches of the same
+saved profile, appending to the configured file. Nonpersistent text logging
+remains session-only. Runtime reconnects retain the active log.

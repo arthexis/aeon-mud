@@ -23,6 +23,7 @@ class Profile:
     password_prompt: str = r"(?im)password:\s*$"
     transcript: str = "off"
     transcript_path: str = ""
+    log_persist: bool = False
     socks5_host: str = ""
     socks5_port: int = 0
     proxy_command: list[str] = field(default_factory=list)
