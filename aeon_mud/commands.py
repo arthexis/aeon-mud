@@ -13,6 +13,7 @@ from .transcript import Transcript, resolve_log_path
 from .realm_watches import save_realm_watches
 from .watch_events import DEFAULT_COOLDOWN, parse_sound, lcd_argv
 from .puppet import PuppetServer
+from .triggers import handle_trigger_command
 
 if TYPE_CHECKING:
     from .session import SessionController
@@ -454,7 +455,7 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line == "//help":
         confirm_local_command(
             transcript, ui,
-            "Local commands: //help, //puppet on|off, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
+            "Local commands: //help, //puppet on|off, //trigger PATTERN --send RESPONSE, //trigger --list, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
             "[--lcd TEXT] [--cooldown SECONDS] [--search] [--re] [--email] (yellow default), "
             "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE] [--persist|--switch|--stop|--off|--status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."
@@ -462,6 +463,14 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
         return True
     if not line.startswith("//"):
         return False
+    if line == "//trigger" or line.startswith("//trigger "):
+        engine = getattr(ui, "triggers", None)
+        if engine is None:
+            confirm_local_command(transcript, ui, "Trigger engine unavailable")
+        else:
+            result = handle_trigger_command(line, engine)
+            confirm_local_command(transcript, ui, result or "Trigger error")
+        return True
     if handle_unwatch_command(line, transcript, ui):
         return True
     if handle_watch_command(line, transcript, ui):
@@ -512,7 +521,7 @@ def send_composed_input(
                     try:
                         puppet = PuppetServer(controller.character_login[0])
                         if isinstance(transcript, Transcript):
-                            puppet.attach(transcript)
+                            puppet.attach(transcript, journal=getattr(getattr(ui, "triggers", None), "journal", None))
                         puppet.start()
                         controller.puppet = puppet
                     except (OSError, RuntimeError, ValueError) as exc:

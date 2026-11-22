@@ -94,6 +94,7 @@ class PuppetServer:
         self.worker: threading.Thread | None = None
         self.bound_inode: int | None = None
         self.journal: PuppetJournal | None = None
+        self.owns_journal = False
         self.connection_slots = threading.BoundedSemaphore(8)
 
     def start(self) -> None:
@@ -242,20 +243,24 @@ class PuppetServer:
             self.worker.join(timeout=1.0)
         self._unlink_owned_socket()
 
-    def attach(self, transcript) -> None:
+    def attach(self, transcript, journal=None) -> None:
         if self.journal is not None:
             raise RuntimeError("Puppet already attached")
-        journal = PuppetJournal(self.path.stem.removeprefix("puppet-"))
-        self.journal = journal
-        transcript.observers.append(journal.record)
+        self.owns_journal = journal is None
+        self.journal = journal if journal is not None else PuppetJournal(
+            self.path.stem.removeprefix("puppet-"))
+        if self.owns_journal:
+            transcript.observers.append(self.journal.record)
 
     def detach(self, transcript) -> None:
         if self.journal is not None:
-            try:
-                transcript.observers.remove(self.journal.record)
-            except ValueError:
-                pass
+            if self.owns_journal:
+                try:
+                    transcript.observers.remove(self.journal.record)
+                except ValueError:
+                    pass
             self.journal = None
+            self.owns_journal = False
 
     def _unlink_owned_socket(self) -> None:
         # Never unlink another process's replacement or a symlink.
