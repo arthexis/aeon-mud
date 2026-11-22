@@ -591,3 +591,51 @@ corresponding log destination across fresh client sessions and
 `//log --switch`. The durable journal is size-bounded, older cursors can
 expire, and secret input is redacted. Correlated received messages may be
 unsolicited MUD output and are not proof of command causality.
+
+
+### One-shot text triggers
+
+A trigger matches **complete incoming server lines** using the same anchored
+pattern language as `//watch` (including `[sigil]`, `***` for three
+literal asterisks, `--search`, and `--re`). Unlike watches, it dispatches
+one or more MUD commands **once** and then becomes spent.
+
+```text
+//trigger "You receive [amount] gold from [sender]" --send "thank [sender]" --name gifts
+//trigger --re "([A-Za-z]+) offers (\d+) coins" --send "thank {1}" --search
+//trigger "The gate opens" --send "north" --delay 500ms --persist
+//trigger "You enter the tavern" --send "look" --send "list" --once-per-session --persist
+//trigger "A guard asks your name" --send "say Hero" --dry-run
+//trigger --list
+//trigger --status gifts
+//trigger --test gifts "You receive 25 gold from Gandalf"
+//trigger --off gifts
+//trigger --on gifts
+//trigger --rearm gifts
+//trigger --remove gifts
+//trigger --pause-all
+//trigger --resume-all
+//trigger --clear
+```
+
+In plain patterns, `[sigil]` captures a named value. Response templates may
+use `[sigil]` or `{sigil}`; regex responses additionally support numbered
+`{1}`, `{2}`, etc. `{0}` is the complete match. Substitution runs only
+once, so captured text cannot inject new placeholders or local `//` commands.
+Rules match from the beginning unless `--search` is supplied.
+
+Triggers are scoped to `host:port + character`. `--persist` writes the
+definition and **spent state** to an owner-only settings file. `--once-per-session`
+rearms when the client starts a fresh character session, **not** when a
+network connection is reestablished. `--dry-run` consumes the first match
+and records the expanded response without sending anything. `--test` only
+previews. Named and numbered IDs work with lifecycle management commands.
+
+The receive thread only reserves actions; a foreground dispatch queue sends
+commands through the normal session controller, with existing paste pacing.
+A one-shot is reserved before dispatch and is never automatically retried
+after ambiguous send failures or a reconnect. `--pause-all` cancels pending
+sends without rearming rules. The session event journal records
+`origin=trigger`, the trigger ID/name, captures, and an action ID, so
+`aeon-puppet CHARACTER --read-last` can observe the output after a trigger
+when Puppet is enabled. A MUD's unsolicited output may still be interleaved.
