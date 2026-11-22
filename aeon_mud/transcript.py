@@ -48,7 +48,7 @@ class Transcript:
         self.path = base_dir / f"{safe_name}-{stamp}{suffix}"
 
     def enable_text_log(self, destination: str | None = None) -> Path:
-        path = resolve_log_path(destination).absolute()
+        path = resolve_log_path(destination)
         if path.exists() and path.is_dir():
             raise ValueError(f"{path} is a directory")
         with self.lock:
