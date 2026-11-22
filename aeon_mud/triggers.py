@@ -359,6 +359,9 @@ class TriggerEngine:
         with self.lock:
             if self.paused or not self.pending:
                 return
+            # Never dispatch queued commands during the character login handshake.
+            if not getattr(controller, "trigger_ready", True):
+                return
             pending = self.pending[0]
             if self.clock() < pending.due:
                 return
