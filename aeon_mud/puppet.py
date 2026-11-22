@@ -12,6 +12,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 
 MAX_REQUEST = 65536
@@ -61,6 +62,23 @@ class PuppetRequest:
     commands: list[str]
     done: threading.Event = field(default_factory=threading.Event)
     error: str | None = None
+    started: bool = False
+    cancelled: bool = False
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def begin(self) -> bool:
+        with self.lock:
+            if self.cancelled:
+                return False
+            self.started = True
+            return True
+
+    def cancel_if_pending(self) -> bool:
+        with self.lock:
+            if self.started:
+                return False
+            self.cancelled = True
+            return True
 
 
 class PuppetServer:
@@ -72,17 +90,20 @@ class PuppetServer:
         self.stop_event = threading.Event()
         self.listener: socket.socket | None = None
         self.worker: threading.Thread | None = None
+        self.bound_inode: int | None = None
 
     def start(self) -> None:
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             # Never remove another process's socket, even if it seems stale.
             listener.bind(str(self.path))
+            self.bound_inode = self.path.lstat().st_ino
             os.chmod(self.path, 0o600)
             listener.listen(8)
             listener.settimeout(0.2)
         except BaseException:
             listener.close()
+            self._unlink_owned_socket()
             raise
         self.listener = listener
         self.worker = threading.Thread(target=self._serve, name="aeon-puppet", daemon=True)
@@ -115,7 +136,9 @@ class PuppetServer:
                     request = PuppetRequest(commands)
                     self.pending.put_nowait(request)
                     if not request.done.wait(15):
-                        raise ValueError("session did not process request in time")
+                        if request.cancel_if_pending():
+                            raise ValueError("request expired before dispatch")
+                        raise ValueError("request was dispatched; delivery outcome unknown")
                     result = {"ok": request.error is None, "error": request.error}
                 except (ValueError, TypeError, KeyError, json.JSONDecodeError, queue.Full, socket.timeout) as exc:
                     result = {"ok": False, "error": str(exc) or "queue full"}
@@ -133,13 +156,18 @@ class PuppetServer:
             try:
                 if self.stop_event.is_set():
                     raise RuntimeError("puppet disabled")
+                if not request.begin():
+                    raise RuntimeError("puppet request expired")
                 if controller.current_connection() is None:
                     raise RuntimeError("MUD session disconnected")
                 for idx, command in enumerate(request.commands):
                     if idx:
                         # Mirror normal multiline paste pacing.
-                        import time
                         time.sleep(controller.profile.paste_line_delay)
+                    if self.stop_event.is_set():
+                        raise RuntimeError("puppet disabled")
+                    if controller.current_connection() is None:
+                        raise RuntimeError("MUD session disconnected")
                     controller.send_line(command, secret=False, remember=False)
             except (OSError, RuntimeError, ValueError) as exc:
                 request.error = str(exc)
@@ -159,11 +187,20 @@ class PuppetServer:
             request.done.set()
         if self.worker is not None and self.worker is not threading.current_thread():
             self.worker.join(timeout=1.0)
+        self._unlink_owned_socket()
+
+    def _unlink_owned_socket(self) -> None:
+        # Never unlink another process's replacement or a symlink.
+        if self.bound_inode is None:
+            return
         try:
-            if self.path.is_socket():
+            info = self.path.lstat()
+            if stat.S_ISSOCK(info.st_mode) and info.st_ino == self.bound_inode:
                 self.path.unlink()
         except FileNotFoundError:
             pass
+        finally:
+            self.bound_inode = None
 
 
 def main(argv: list[str] | None = None) -> int:

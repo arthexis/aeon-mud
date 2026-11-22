@@ -6,7 +6,7 @@ import time
 import unittest
 from unittest import mock
 
-from aeon_mud.puppet import PuppetServer, main, puppet_socket_path
+from aeon_mud.puppet import PuppetRequest, PuppetServer, main, puppet_socket_path
 from aeon_mud.commands import send_composed_input
 
 
@@ -88,6 +88,77 @@ class PuppetTests(unittest.TestCase):
         finally:
             if controller.puppet:
                 controller.puppet.close()
+
+
+    def test_expired_pending_request_never_dispatches(self):
+        server = PuppetServer("Hero")
+        sent = []
+        class Controller:
+            def current_connection(self): return object()
+            def send_line(self, line, **kwargs): sent.append(line)
+        request = PuppetRequest(["look"])
+        server.pending.put_nowait(request)
+        self.assertTrue(request.cancel_if_pending())
+        server.drain(Controller())
+        self.assertEqual(sent, [])
+        self.assertEqual(request.error, "puppet request expired")
+        self.assertTrue(request.done.is_set())
+
+    def test_started_request_reports_uncertain_outcome_not_cancelled(self):
+        request = PuppetRequest(["look"])
+        self.assertTrue(request.begin())
+        self.assertFalse(request.cancel_if_pending())
+
+    def test_socket_cleanup_does_not_unlink_replacement(self):
+        server = PuppetServer("Hero")
+        server.start()
+        original = server.path
+        original.unlink()
+        replacement = original.with_name("replacement.sock")
+        import socket
+        other = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            other.bind(str(replacement))
+            replacement.rename(original)
+            server.close()
+            self.assertTrue(original.is_socket())
+        finally:
+            other.close()
+            original.unlink(missing_ok=True)
+
+    def test_multiline_prefix_and_order(self):
+        import io
+        server = PuppetServer("Hero")
+        server.start()
+        sent = []
+        class Controller:
+            profile = type("Profile", (), {"paste_line_delay": 0})()
+            def current_connection(self): return object()
+            def send_line(self, line, **kwargs): sent.append(line)
+        try:
+            with mock.patch("sys.stdin", io.StringIO("first\\nsecond\\n")):
+                self.assertEqual(self.run_with_pump(server, Controller(), ["--prefix", "say ", "hero"]), [0])
+            self.assertEqual(sent, ["say first", "say second"])
+        finally:
+            server.close()
+
+    def test_send_failure_is_reported_and_stops_batch(self):
+        server = PuppetServer("Hero")
+        server.start()
+        sent = []
+        class Controller:
+            profile = type("Profile", (), {"paste_line_delay": 0})()
+            def current_connection(self): return object()
+            def send_line(self, line, **kwargs):
+                sent.append(line)
+                raise OSError("connection failed")
+        import io
+        try:
+            with mock.patch("sys.stdin", io.StringIO("first\\nsecond\\n")):
+                self.assertEqual(self.run_with_pump(server, Controller(), ["hero"]), [1])
+            self.assertEqual(sent, ["first"])
+        finally:
+            server.close()
 
 
 if __name__ == "__main__":
