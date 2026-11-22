@@ -125,7 +125,7 @@ class PuppetServer:
             if not self.connection_slots.acquire(blocking=False):
                 with conn:
                     try:
-                        conn.sendall(b'{"ok": false, "error": "too many active Puppet clients"}\\n')
+                        conn.sendall(b'{"ok": false, "error": "too many active Puppet clients"}\n')
                     except OSError:
                         pass
                 continue
@@ -141,50 +141,50 @@ class PuppetServer:
     def _serve_connection(self, conn: socket.socket) -> None:
         try:
             with conn:
-            conn.settimeout(5.0)
-            try:
-                payload = bytearray()
-                while b"\n" not in payload:
-                    part = conn.recv(min(4096, MAX_REQUEST + 1 - len(payload)))
-                    if not part or len(payload) + len(part) > MAX_REQUEST:
-                        raise ValueError("request too large or incomplete")
-                    payload.extend(part)
-                body = json.loads(bytes(payload).split(b"\n", 1)[0])
-                if not isinstance(body, dict):
-                    raise ValueError("expected JSON object")
-                operation = body.get("op", "send")
-                if operation in {"read", "read_last", "subscribe"}:
-                    if self.journal is None:
-                        raise ValueError("Puppet observation not enabled")
-                    result = {"ok": True, **self.journal.read(
-                        action_id=body.get("action_id"), last=operation == "read_last",
-                        after=body.get("after"), until_next=bool(body.get("until_next", False)),
-                        wait=float(body.get("wait", 0)), idle=float(body.get("idle", 0)))}
+                conn.settimeout(5.0)
+                try:
+                    payload = bytearray()
+                    while b"\n" not in payload:
+                        part = conn.recv(min(4096, MAX_REQUEST + 1 - len(payload)))
+                        if not part or len(payload) + len(part) > MAX_REQUEST:
+                            raise ValueError("request too large or incomplete")
+                        payload.extend(part)
+                    body = json.loads(bytes(payload).split(b"\n", 1)[0])
+                    if not isinstance(body, dict):
+                        raise ValueError("expected JSON object")
+                    operation = body.get("op", "send")
+                    if operation in {"read", "read_last", "subscribe"}:
+                        if self.journal is None:
+                            raise ValueError("Puppet observation not enabled")
+                        result = {"ok": True, **self.journal.read(
+                            action_id=body.get("action_id"), last=operation == "read_last",
+                            after=body.get("after"), until_next=bool(body.get("until_next", False)),
+                            wait=float(body.get("wait", 0)), idle=float(body.get("idle", 0)))}
+                        conn.sendall((json.dumps(result) + "\n").encode())
+                        continue
+                    if operation != "send":
+                        raise ValueError("unknown operation")
+                    commands = body.get("commands")
+                    if not isinstance(commands, list) or not 1 <= len(commands) <= MAX_COMMANDS:
+                        raise ValueError("expected 1-32 commands")
+                    if any(not isinstance(cmd, str) or not cmd or "\n" in cmd or "\r" in cmd or len(cmd) > 4096 for cmd in commands):
+                        raise ValueError("commands must be nonempty single lines (max 4096 characters)")
+                    request = PuppetRequest(commands)
+                    self.pending.put_nowait(request)
+                    if not request.done.wait(15):
+                        if request.cancel_if_pending():
+                            raise ValueError("request expired before dispatch")
+                        raise ValueError("request was dispatched; delivery outcome unknown")
+                    result = {"ok": request.error is None, "error": request.error,
+                              "action_id": request.action["action_id"] if request.action else None,
+                              "cursor_start": request.action["seq"] if request.action else None,
+                              "session_id": request.action["session_id"] if request.action else None}
+                except (ValueError, TypeError, KeyError, json.JSONDecodeError, queue.Full, socket.timeout) as exc:
+                    result = {"ok": False, "error": str(exc) or "queue full"}
+                try:
                     conn.sendall((json.dumps(result) + "\n").encode())
-                    continue
-                if operation != "send":
-                    raise ValueError("unknown operation")
-                commands = body.get("commands")
-                if not isinstance(commands, list) or not 1 <= len(commands) <= MAX_COMMANDS:
-                    raise ValueError("expected 1-32 commands")
-                if any(not isinstance(cmd, str) or not cmd or "\n" in cmd or "\r" in cmd or len(cmd) > 4096 for cmd in commands):
-                    raise ValueError("commands must be nonempty single lines (max 4096 characters)")
-                request = PuppetRequest(commands)
-                self.pending.put_nowait(request)
-                if not request.done.wait(15):
-                    if request.cancel_if_pending():
-                        raise ValueError("request expired before dispatch")
-                    raise ValueError("request was dispatched; delivery outcome unknown")
-                result = {"ok": request.error is None, "error": request.error,
-                          "action_id": request.action["action_id"] if request.action else None,
-                          "cursor_start": request.action["seq"] if request.action else None,
-                          "session_id": request.action["session_id"] if request.action else None}
-            except (ValueError, TypeError, KeyError, json.JSONDecodeError, queue.Full, socket.timeout) as exc:
-                result = {"ok": False, "error": str(exc) or "queue full"}
-            try:
-                conn.sendall((json.dumps(result) + "\n").encode())
-            except OSError:
-                pass
+                except OSError:
+                    pass
 
 
         finally:
