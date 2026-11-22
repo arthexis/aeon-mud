@@ -205,8 +205,14 @@ class PuppetServer:
                     raise RuntimeError("MUD session disconnected")
                 if self.journal is not None:
                     transcript = getattr(controller, "transcript", None)
-                    path = getattr(transcript, "path", None) if getattr(transcript, "mode", "off") != "off" else None
-                    request.action = self.journal.start_action(request.commands, durable=path is not None, log_path=path)
+                    if transcript is not None:
+                        # Serialize action boundary against incoming transcript writes.
+                        with transcript.lock:
+                            path = transcript.path if transcript.mode in {"text", "plain"} else None
+                            request.action = self.journal.start_action(
+                                request.commands, durable=path is not None, log_path=path)
+                    else:
+                        request.action = self.journal.start_action(request.commands)
                 for idx, command in enumerate(request.commands):
                     if idx:
                         # Mirror normal multiline paste pacing.
