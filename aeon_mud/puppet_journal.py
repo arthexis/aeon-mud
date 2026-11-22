@@ -144,13 +144,14 @@ class PuppetJournal:
             if start < self.floor:
                 raise ValueError("cursor expired: older events no longer retained")
             end = None
-            if until_next and action_start is not None:
-                for action in self.actions.values():
-                    if action["seq"] > action_start and (end is None or action["seq"] < end):
-                        end = action["seq"]
             last_activity = time.monotonic()
             previous = -1
             while True:
+                # Recompute the boundary as new actions may arrive while waiting.
+                if until_next and action_start is not None:
+                    for action in self.actions.values():
+                        if action["seq"] > action_start and (end is None or action["seq"] < end):
+                            end = action["seq"]
                 matching = [r for r in self.events if r["seq"] > start and (end is None or r["seq"] < end)
                             and (not received_only or r["direction"] == "recv")]
                 if len(matching) != previous:
