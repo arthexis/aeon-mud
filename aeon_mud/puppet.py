@@ -242,11 +242,30 @@ class PuppetServer:
             self.bound_inode = None
 
 
+def parse_duration(value: str) -> float:
+    """Accept seconds, e.g. 2, 2s, 500ms, or 1m."""
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m)?", value.strip())
+    if not match:
+        raise argparse.ArgumentTypeError("duration must be a nonnegative number with ms, s, or m suffix")
+    amount = float(match.group(1))
+    suffix = match.group(2)
+    seconds = amount / 1000 if suffix == "ms" else amount * 60 if suffix == "m" else amount
+    if seconds > 10:
+        raise argparse.ArgumentTypeError("maximum observation wait is 10 seconds per request")
+    return seconds
+
+
 class PuppetClient:
     """Reusable structured client for a character's local Puppet socket."""
 
     def __init__(self, character: str):
         self.path = puppet_socket_path(character)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
 
     def request(self, payload: dict):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
@@ -254,14 +273,16 @@ class PuppetClient:
             sock.connect(str(self.path))
             sock.sendall((json.dumps(payload) + "\n").encode())
             response = bytearray()
-            while b"\n" not in response and len(response) <= MAX_REQUEST:
+            while b"\n" not in response:
+                if len(response) > MAX_REQUEST:
+                    raise RuntimeError("Puppet response exceeded maximum size")
                 part = sock.recv(4096)
                 if not part:
                     raise RuntimeError("session closed without acknowledgement")
                 response.extend(part)
         result = json.loads(bytes(response).split(b"\n", 1)[0])
-        if not result.get("ok"):
-            raise RuntimeError(result.get("error") or "Puppet request rejected")
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError(result.get("error") if isinstance(result, dict) else "invalid Puppet response")
         return result
 
     def send(self, command: str, prefix: str = ""):
@@ -274,16 +295,48 @@ class PuppetClient:
             "action_id": action_id, "after": after, "wait": wait,
             "idle": idle, "until_next": until_next})
 
-    def follow(self, action_id: str | None = None, *, last: bool = False):
-        cursor = None
+    def read_all(self, action_id: str | None = None, *, last: bool = False,
+                 after: int | None = None, wait: float = 0, idle: float = 0,
+                 until_next: bool = False):
+        """Collect all available pages without losing the original action boundary."""
+        current = after
+        events = []
+        pages = 0
         while True:
-            result = self.read(action_id, last=last and cursor is None,
-                               after=cursor, wait=2)
+            result = self.read(action_id, last=last, after=current,
+                               wait=wait if pages == 0 else 0,
+                               idle=idle if pages == 0 else 0,
+                               until_next=until_next)
+            events.extend(result["events"])
+            action_id = result.get("action_id") or action_id
+            last = False
+            if not result.get("more"):
+                return {**result, "events": events}
+            if result["cursor_end"] == current:
+                raise RuntimeError("Puppet observation cursor did not advance")
+            current = result["cursor_end"]
+            pages += 1
+            if pages > 256:
+                raise RuntimeError("Puppet observation pagination limit exceeded")
+
+    def follow(self, action_id: str | None = None, *, last: bool = False):
+        result = self.read_all(action_id, last=last)
+        for event in result["events"]:
+            yield event
+        cursor = result["cursor_end"]
+        while True:
+            result = self.read_all(after=cursor, wait=2)
             for event in result["events"]:
                 yield event
             cursor = result["cursor_end"]
-            action_id = None
-            last = False
+
+
+def _print_observation(result: dict, *, structured: bool):
+    if structured:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        for event in result["events"]:
+            print(event["text"], end="", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -293,34 +346,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--read", metavar="ACTION_ID", help="Read output since a Puppet action")
     parser.add_argument("--read-last", action="store_true", help="Read output since the last Puppet action")
     parser.add_argument("--follow", action="store_true", help="Stream new received output")
-    parser.add_argument("--wait", type=float, default=0, metavar="SECONDS")
-    parser.add_argument("--until-idle", type=float, default=0, metavar="SECONDS")
+    parser.add_argument("--wait", type=parse_duration, default=0, metavar="DURATION")
+    parser.add_argument("--until-idle", type=parse_duration, default=0, metavar="DURATION")
     parser.add_argument("--until-next-action", action="store_true")
     parser.add_argument("--after-cursor", type=int)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("character")
     parser.add_argument("command", nargs="*")
-    args = parser.parse_args(argv)
+    args = parser.parse_intermixed_args(argv)
     try:
         client = PuppetClient(args.character)
         observation = args.read is not None or args.read_last or args.after_cursor is not None
+        wait = args.wait or (10.0 if args.until_idle else 0.0)
         if observation:
             if args.command or args.prefix or (args.read and args.read_last):
                 parser.error("read operations cannot include commands, prefix or conflicting read modes")
-            result = client.read(args.read, last=args.read_last, after=args.after_cursor,
-                                 wait=args.wait, idle=args.until_idle,
-                                 until_next=args.until_next_action)
-            if args.json:
-                print(json.dumps(result, ensure_ascii=False))
-            else:
-                for event in result["events"]:
-                    print(event["text"], end="")
+            result = client.read_all(args.read, last=args.read_last, after=args.after_cursor,
+                                     wait=wait, idle=args.until_idle,
+                                     until_next=args.until_next_action)
+            _print_observation(result, structured=args.json)
             if args.follow:
                 cursor = result["cursor_end"]
                 while True:
-                    result = client.read(after=cursor, wait=2)
-                    for event in result["events"]:
-                        print(event["text"], end="", flush=True)
+                    result = client.read_all(after=cursor, wait=2)
+                    _print_observation(result, structured=args.json)
                     cursor = result["cursor_end"]
             return 0
         if args.follow:
@@ -332,18 +381,21 @@ def main(argv: list[str] | None = None) -> int:
         if len(commands) > MAX_COMMANDS:
             parser.error(f"maximum {MAX_COMMANDS} commands per request")
         result = client.request({"op": "send", "commands": commands})
-        if args.capture or args.json:
-            print(json.dumps(result, ensure_ascii=False) if args.json else result.get("action_id") or "")
-        if args.wait or args.until_idle:
+        if wait:
             if not result.get("action_id"):
                 raise RuntimeError("action has no capture ID")
-            data = client.read(result["action_id"], wait=args.wait, idle=args.until_idle,
-                               until_next=args.until_next_action)
+            observed = client.read_all(result["action_id"], wait=wait, idle=args.until_idle,
+                                       until_next=args.until_next_action)
             if args.json:
-                print(json.dumps(data, ensure_ascii=False))
+                print(json.dumps({"action": result, "observation": observed}, ensure_ascii=False))
             else:
-                for event in data["events"]:
-                    print(event["text"], end="")
+                if args.capture:
+                    print(result["action_id"])
+                _print_observation(observed, structured=False)
+        elif args.json:
+            print(json.dumps(result, ensure_ascii=False))
+        elif args.capture:
+            print(result.get("action_id") or "")
         return 0
     except KeyboardInterrupt:
         return 130
