@@ -155,6 +155,8 @@ class SessionController:
         self.character_login: tuple[str, str] | None = None
         self.puppet = None
         self.triggers = None
+        self.trigger_login_sent = False
+        self.trigger_ready = True
         self.tail = ""
         self.sent_username = False
         self.sent_password = False
@@ -214,6 +216,9 @@ class SessionController:
             self.tail = ""
             self.sent_username = False
             self.sent_password = False
+            if self.character_login is not None:
+                self.trigger_login_sent = False
+                self.trigger_ready = False
             self.last_io = time.monotonic()
             self.last_keepalive = 0.0
             old_ready = self.ready_for_commands
@@ -230,6 +235,9 @@ class SessionController:
             old_transport = self.transport
             self.transport = None
             self.codec = None
+            if self.character_login is not None:
+                self.trigger_login_sent = False
+                self.trigger_ready = False
             self.ready_for_commands.set()  # interrupt stale login waits
         if old_transport is not None:
             old_transport.close()
@@ -330,6 +338,8 @@ class SessionController:
             f"connect {character} {password}", secret=True, remember=False,
             expected_transport=expected_transport,
         )
+        with self.lock:
+            self.trigger_login_sent = True
         self.ui.set_status(f"Login command sent for {character}")
 
     def observe_output(self, text: str) -> None:
@@ -522,7 +532,9 @@ def receiver_loop(
             transcript.write("recv", text)
             controller.ui.append_output(text)
             controller.observe_output(text)
-            if controller.triggers is not None:
+            if controller.character_login is not None and controller.trigger_login_sent:
+                controller.trigger_ready = True
+            if controller.triggers is not None and controller.trigger_ready:
                 controller.triggers.feed(text)
     if not stop.is_set():
         stop.set()
@@ -605,6 +617,7 @@ def session_loop(
         )
         if character is not None:
             controller.character_login = (character, character_password)
+            controller.trigger_ready = False
         controller.triggers = TriggerEngine(profile, character)
         ui.triggers = controller.triggers
         if character is not None:
@@ -630,7 +643,7 @@ def session_loop(
             transcript.write("recv", initial_banner)
             ui.append_output(initial_banner)
             controller.observe_output(initial_banner)
-            if controller.triggers is not None:
+            if controller.triggers is not None and controller.trigger_ready:
                 controller.triggers.feed(initial_banner)
         receiver.start()
         if character is not None:
