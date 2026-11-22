@@ -532,3 +532,25 @@ destinations, use `//log --switch OTHERFILE`.
 Persistent text logs resume automatically on subsequent launches of the same
 saved profile, appending to the configured file. Nonpersistent text logging
 remains session-only. Runtime reconnects retain the active log.
+
+### Local Puppet command bridge (Unix)
+
+Start a character session with `aeon-mud connect PROFILE --login Hero`, and
+enter `//puppet on` after logging in to enable its local Unix-domain socket.
+The `aeon-puppet` command (installed via the Python console scripts) sends
+single-line commands to the active character session:
+
+```sh
+aeon-puppet Hero look
+aeon-puppet --prefix 'say ' Hero Hello everyone
+printf 'look\\nnorth\\n' | aeon-puppet Hero
+```
+
+`//puppet off` disables the bridge and removes its socket. Normal session
+shutdown does the same. Only one active socket is allowed for a character,
+and the socket directory and socket are owner-restricted. The feature is
+explicitly opt-in, Unix-only, and uses the existing session connection
+rather than logging in again. Commands are only accepted while connected.
+A successful acknowledgement means the command was handed to the Telnet
+transport, **not** that the MUD accepted or executed it. A timeout after
+dispatch means the delivery outcome is unknown; avoid automatic retries.

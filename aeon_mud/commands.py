@@ -12,6 +12,7 @@ from .terminal import *
 from .transcript import Transcript, resolve_log_path
 from .realm_watches import save_realm_watches
 from .watch_events import DEFAULT_COOLDOWN, parse_sound, lcd_argv
+from .puppet import PuppetServer
 
 if TYPE_CHECKING:
     from .session import SessionController
@@ -453,7 +454,7 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line == "//help":
         confirm_local_command(
             transcript, ui,
-            "Local commands: //help, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
+            "Local commands: //help, //puppet on|off, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
             "[--lcd TEXT] [--cooldown SECONDS] [--search] [--re] [--email] (yellow default), "
             "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE] [--persist|--switch|--stop|--off|--status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."
@@ -499,6 +500,30 @@ def send_composed_input(
     lines = split_composed_input(text)
     sent = 0
     for index, line in enumerate(lines):
+        if line == "//puppet" or line.startswith("//puppet "):
+            action = line[len("//puppet"):].strip().lower()
+            if action == "on":
+                if controller.character_login is None:
+                    confirm_local_command(transcript, ui, "Puppet requires a character session started with --login")
+                elif controller.puppet is not None:
+                    confirm_local_command(transcript, ui, f"Puppet already enabled: {controller.puppet.path}")
+                else:
+                    try:
+                        puppet = PuppetServer(controller.character_login[0])
+                        puppet.start()
+                        controller.puppet = puppet
+                    except (OSError, RuntimeError, ValueError) as exc:
+                        confirm_local_command(transcript, ui, f"Puppet error: {exc}")
+                    else:
+                        confirm_local_command(transcript, ui, f"Puppet enabled: {puppet.path}")
+            elif action == "off":
+                if controller.puppet is not None:
+                    controller.puppet.close()
+                    controller.puppet = None
+                confirm_local_command(transcript, ui, "Puppet disabled")
+            else:
+                confirm_local_command(transcript, ui, "Usage: //puppet on|off")
+            continue
         if handle_local_command(line, transcript, ui):
             continue
         try:
