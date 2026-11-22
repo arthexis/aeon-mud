@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from .puppet_journal import PuppetJournal
+from .reaction import reaction_delay
 
 MAX_REQUEST = 65536
 MAX_COMMANDS = 32
@@ -64,6 +66,9 @@ class PuppetRequest:
     done: threading.Event = field(default_factory=threading.Event)
     error: str | None = None
     action: dict | None = None
+    immediate: bool = False
+    due: float = 0.0
+    reaction_seconds: float = 0.0
     started: bool = False
     cancelled: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -89,6 +94,7 @@ class PuppetServer:
     def __init__(self, character: str) -> None:
         self.path = puppet_socket_path(character)
         self.pending: queue.Queue[PuppetRequest] = queue.Queue(maxsize=32)
+        self.scheduled: deque[PuppetRequest] = deque()
         self.stop_event = threading.Event()
         self.listener: socket.socket | None = None
         self.worker: threading.Thread | None = None
@@ -170,7 +176,12 @@ class PuppetServer:
                         raise ValueError("expected 1-32 commands")
                     if any(not isinstance(cmd, str) or not cmd or "\n" in cmd or "\r" in cmd or len(cmd) > 4096 for cmd in commands):
                         raise ValueError("commands must be nonempty single lines (max 4096 characters)")
-                    request = PuppetRequest(commands)
+                    immediate = body.get("immediate", False)
+                    if not isinstance(immediate, bool):
+                        raise ValueError("immediate must be boolean")
+                    request = PuppetRequest(commands, immediate=immediate)
+                    request.reaction_seconds = reaction_delay(immediate=immediate)
+                    request.due = time.monotonic() + request.reaction_seconds
                     self.pending.put_nowait(request)
                     if not request.done.wait(15):
                         if request.cancel_if_pending():
@@ -179,7 +190,8 @@ class PuppetServer:
                     result = {"ok": request.error is None, "error": request.error,
                               "action_id": request.action["action_id"] if request.action else None,
                               "cursor_start": request.action["seq"] if request.action else None,
-                              "session_id": request.action["session_id"] if request.action else None}
+                              "session_id": request.action["session_id"] if request.action else None,
+                              "reaction_delay_ms": round(request.reaction_seconds * 1000)}
                 except (ValueError, TypeError, KeyError, json.JSONDecodeError, queue.Full, socket.timeout) as exc:
                     result = {"ok": False, "error": str(exc) or "queue full"}
                 try:
@@ -192,11 +204,16 @@ class PuppetServer:
             self.connection_slots.release()
 
     def drain(self, controller: object) -> None:
+        """Schedule without blocking the UI thread; dispatch once the delay elapses."""
         while True:
             try:
-                request = self.pending.get_nowait()
+                self.scheduled.append(self.pending.get_nowait())
             except queue.Empty:
-                return
+                break
+        now = time.monotonic()
+        ready = [request for request in self.scheduled if request.due <= now]
+        self.scheduled = deque(request for request in self.scheduled if request.due > now)
+        for request in ready:
             try:
                 if self.stop_event.is_set():
                     raise RuntimeError("puppet disabled")
@@ -207,7 +224,6 @@ class PuppetServer:
                 if self.journal is not None:
                     transcript = getattr(controller, "transcript", None)
                     if transcript is not None:
-                        # Serialize action boundary against incoming transcript writes.
                         with transcript.lock:
                             path = transcript.path if transcript.mode in {"text", "plain"} else None
                             request.action = self.journal.start_action(
@@ -216,7 +232,7 @@ class PuppetServer:
                         request.action = self.journal.start_action(request.commands)
                 for idx, command in enumerate(request.commands):
                     if idx:
-                        # Mirror normal multiline paste pacing.
+                        # Preserve existing multiline paste pacing after the initial delay.
                         time.sleep(controller.profile.paste_line_delay)
                     if self.stop_event.is_set():
                         raise RuntimeError("puppet disabled")
@@ -230,6 +246,10 @@ class PuppetServer:
 
     def close(self) -> None:
         self.stop_event.set()
+        while self.scheduled:
+            request = self.scheduled.popleft()
+            request.error = "puppet disabled"
+            request.done.set()
         if self.listener is not None:
             self.listener.close()
         while True:
@@ -319,8 +339,9 @@ class PuppetClient:
             raise RuntimeError(result.get("error") if isinstance(result, dict) else "invalid Puppet response")
         return result
 
-    def send(self, command: str, prefix: str = ""):
-        return self.request({"op": "send", "commands": [prefix + command]})
+    def send(self, command: str, prefix: str = "", *, immediate: bool = False):
+        return self.request({"op": "send", "commands": [prefix + command],
+                             "immediate": immediate})
 
     def read(self, action_id: str | None = None, *, last: bool = False,
              after: int | None = None, wait: float = 0, idle: float = 0,
@@ -376,6 +397,7 @@ def _print_observation(result: dict, *, structured: bool):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aeon-puppet", description="Send commands and observe MUD output")
     parser.add_argument("--prefix", default="")
+    parser.add_argument("--immediate", action="store_true", help="Skip the randomized first-command reaction delay")
     parser.add_argument("--capture", action="store_true", help="Print action ID and starting cursor")
     parser.add_argument("--read", metavar="ACTION_ID", help="Read output since a Puppet action")
     parser.add_argument("--read-last", action="store_true", help="Read output since the last Puppet action")
@@ -393,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
         observation = args.read is not None or args.read_last or args.after_cursor is not None
         wait = args.wait or (10.0 if args.until_idle else 0.0)
         if observation:
-            if args.command or args.prefix or (args.read and args.read_last):
+            if args.command or args.prefix or args.immediate or (args.read and args.read_last):
                 parser.error("read operations cannot include commands, prefix or conflicting read modes")
             result = client.read_all(args.read, last=args.read_last, after=args.after_cursor,
                                      wait=wait, idle=args.until_idle,
@@ -414,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("no commands supplied")
         if len(commands) > MAX_COMMANDS:
             parser.error(f"maximum {MAX_COMMANDS} commands per request")
-        result = client.request({"op": "send", "commands": commands})
+        result = client.request({"op": "send", "commands": commands, "immediate": args.immediate})
         if wait:
             if not result.get("action_id"):
                 raise RuntimeError("action has no capture ID")

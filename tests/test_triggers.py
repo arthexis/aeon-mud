@@ -39,6 +39,8 @@ class TriggerTests(unittest.TestCase):
         ]
         for patch in self.patches:
             patch.start()
+        self.reaction_patch = mock.patch("aeon_mud.triggers.reaction_delay", return_value=0)
+        self.reaction_patch.start()
         self.profile = Profile(name="test", host="mud.example")
         self.transcript = Transcript(self.profile)
         self.clock = [100.0]
@@ -46,6 +48,7 @@ class TriggerTests(unittest.TestCase):
         self.controller = FakeController(self.transcript)
 
     def tearDown(self):
+        self.reaction_patch.stop()
         for patch in reversed(self.patches):
             patch.stop()
         self.tmp.cleanup()
@@ -242,6 +245,51 @@ class TriggerTests(unittest.TestCase):
         self.clock[0] += 5
         self.engine.drain(self.controller)
         self.assertEqual(self.controller.sent, ["wake", "north"])
+
+
+    def test_matched_substring_length_controls_randomized_delay(self):
+        self.reaction_patch.stop()
+        try:
+            with mock.patch("aeon_mud.reaction.random.uniform", side_effect=[.02, .1]):
+                rule = self.engine.add("You receive [item]", ["thank [item]"])
+                self.engine.feed("You receive a long mysterious sword\n")
+            expected = .15 + len("You receive a long mysterious sword") * .02 + .1
+            self.assertAlmostEqual(rule.receipt["reaction_delay_ms"], round(expected * 1000))
+            self.assertEqual(rule.receipt["matched_length"], len("You receive a long mysterious sword"))
+            self.engine.drain(self.controller)
+            self.assertEqual(self.controller.sent, [])
+            self.clock[0] += expected
+            self.engine.drain(self.controller)
+            self.assertEqual(self.controller.sent, ["thank a long mysterious sword"])
+        finally:
+            self.reaction_patch.start()
+
+    def test_search_uses_actual_matched_fragment_not_full_line(self):
+        self.reaction_patch.stop()
+        try:
+            with mock.patch("aeon_mud.reaction.random.uniform", side_effect=[.015, 0]):
+                rule = self.engine.add("dragon", ["hide"], search=True)
+                self.engine.feed("Long prefix preceding dragon in a larger message\n")
+            self.assertEqual(rule.receipt["matched_length"], len("dragon"))
+            self.assertAlmostEqual(rule.receipt["reaction_delay_ms"], round((.15 + len("dragon") * .015) * 1000))
+        finally:
+            self.reaction_patch.start()
+
+    def test_immediate_overrides_random_reaction_but_not_explicit_delay(self):
+        rule = self.engine.add("Bell rings", ["wake"], immediate=True, delay=1)
+        self.engine.feed("Bell rings\n")
+        self.assertEqual(rule.receipt["reaction_delay_ms"], 0)
+        self.engine.drain(self.controller)
+        self.assertEqual(self.controller.sent, [])
+        self.clock[0] += 1
+        self.engine.drain(self.controller)
+        self.assertEqual(self.controller.sent, ["wake"])
+        self.assertEqual(rule.receipt["explicit_delay_ms"], 1000)
+
+    def test_immediate_flag_is_serialized_and_parsed(self):
+        self.assertIn("armed", self.command('//trigger "Bell rings" --send "wake" --immediate --persist --name bell'))
+        restored = TriggerEngine(self.profile, "Hero")
+        self.assertTrue(restored.status("bell")["immediate"])
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from aeon_mud.puppet import PuppetRequest, PuppetServer, main, puppet_socket_path
+from aeon_mud.reaction import reaction_delay
 from aeon_mud.commands import send_composed_input
 
 
@@ -23,7 +24,7 @@ class PuppetTests(unittest.TestCase):
 
     def run_with_pump(self, server, controller, args):
         result = []
-        worker = threading.Thread(target=lambda: result.append(main(args)))
+        worker = threading.Thread(target=lambda: result.append(main(["--immediate", *args])))
         worker.start()
         deadline = time.monotonic() + 3
         while worker.is_alive() and time.monotonic() < deadline:
@@ -159,6 +160,49 @@ class PuppetTests(unittest.TestCase):
             self.assertEqual(sent, ["first"])
         finally:
             server.close()
+
+
+    def test_randomized_delay_formula_and_immediate(self):
+        with mock.patch("aeon_mud.reaction.random.uniform", side_effect=[.02, .1]):
+            self.assertAlmostEqual(reaction_delay("abc"), .31)
+        with mock.patch("aeon_mud.reaction.random.uniform", side_effect=AssertionError("random invoked")):
+            self.assertEqual(reaction_delay("abc", immediate=True), 0)
+        with mock.patch("aeon_mud.reaction.random.uniform", side_effect=[.025, .3]):
+            self.assertEqual(reaction_delay("x" * 500), 3.0)
+
+    def test_delayed_request_does_not_block_drain_and_can_expire(self):
+        server = PuppetServer("Hero")
+        sent = []
+        class Controller:
+            profile = type("Profile", (), {"paste_line_delay": 0})()
+            def current_connection(self): return object()
+            def send_line(self, line, **kwargs): sent.append(line)
+        request = PuppetRequest(["look"])
+        request.reaction_seconds = .4
+        request.due = time.monotonic() + 10
+        server.pending.put_nowait(request)
+        began = time.monotonic()
+        server.drain(Controller())
+        self.assertLess(time.monotonic() - began, .2)
+        self.assertEqual(sent, [])
+        self.assertTrue(request.cancel_if_pending())
+        request.due = 0
+        server.drain(Controller())
+        self.assertEqual(sent, [])
+        self.assertEqual(request.error, "puppet request expired")
+
+    def test_immediate_request_dispatches_without_reaction(self):
+        server = PuppetServer("Hero")
+        sent = []
+        class Controller:
+            profile = type("Profile", (), {"paste_line_delay": 0})()
+            def current_connection(self): return object()
+            def send_line(self, line, **kwargs): sent.append(line)
+        request = PuppetRequest(["look"], immediate=True, due=0)
+        server.pending.put_nowait(request)
+        server.drain(Controller())
+        self.assertEqual(sent, ["look"])
+        self.assertTrue(request.done.is_set())
 
 
 if __name__ == "__main__":

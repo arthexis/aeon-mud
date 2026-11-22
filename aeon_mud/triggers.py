@@ -23,6 +23,7 @@ from .config import config_dir, load_json, save_json
 from .realm_watches import realm_key
 from .terminal import compile_watch_pattern
 from .terminal_text import strip_ansi
+from .reaction import reaction_delay
 
 MAX_RULES = 128
 MAX_QUEUE = 64
@@ -75,6 +76,7 @@ class Trigger:
     persist: bool = False
     once_per_session: bool = False
     dry_run: bool = False
+    immediate: bool = False
     delay: float = 0
     state: str = "armed"
     receipt: dict[str, Any] | None = None
@@ -97,7 +99,7 @@ class Trigger:
 
     def to_data(self) -> dict[str, Any]:
         return {k: getattr(self, k) for k in ("id", "pattern", "commands", "name", "search",
-            "use_regex", "persist", "once_per_session", "dry_run", "delay", "state", "receipt")}
+            "use_regex", "persist", "once_per_session", "dry_run", "immediate", "delay", "state", "receipt")}
 
 
 @dataclass
@@ -325,7 +327,10 @@ class TriggerEngine:
                             except (OSError, ValueError):
                                 pass
                         continue
+                    reaction = reaction_delay(match.group(0), immediate=rule.immediate)
                     receipt = {"status": "dry_run" if rule.dry_run else "reserved",
+                               "matched_length": len(match.group(0)), "reaction_delay_ms": round(reaction * 1000),
+                               "explicit_delay_ms": round(rule.delay * 1000),
                                "matched_text": line, "captures": captures, "commands": commands,
                                "trigger_id": rule.id, "origin": "trigger", "action_id": None}
                     # Reserve and persist *before* enqueue or dispatch; no replay on restart.
@@ -348,7 +353,7 @@ class TriggerEngine:
                             except (OSError, ValueError):
                                 pass
                         continue
-                    self.pending.append(Pending(rule.id, commands, self.clock() + rule.delay, receipt))
+                    self.pending.append(Pending(rule.id, commands, self.clock() + rule.delay + reaction, receipt))
 
     def reset_partial(self):
         with self.lock:
@@ -445,10 +450,10 @@ def handle_trigger_command(line: str, engine: TriggerEngine) -> str | None:
         i = 0
         while i < len(args):
             token = args[i]
-            if token in {"--re", "--search", "--persist", "--once-per-session", "--dry-run"}:
+            if token in {"--re", "--search", "--persist", "--once-per-session", "--dry-run", "--immediate"}:
                 key = {"--re": "use_regex", "--search": "search",
                        "--persist": "persist", "--once-per-session": "once_per_session",
-                       "--dry-run": "dry_run"}[token]
+                       "--dry-run": "dry_run", "--immediate": "immediate"}[token]
                 opts[key] = True
                 i += 1
             elif token in {"--send", "--name", "--delay"}:
