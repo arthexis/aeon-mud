@@ -388,7 +388,7 @@ def save_persistent_log_setting(transcript: Transcript) -> None:
     stored["log_persist"] = bool(transcript.persist)
     if transcript.persist:
         stored["transcript"] = "text"
-        stored["transcript_path"] = str(transcript.path)
+        stored["transcript_path"] = str(transcript.path.absolute())
     elif stored.get("transcript") == "text":
         stored["transcript"] = "off"
         stored["transcript_path"] = ""
