@@ -29,6 +29,13 @@ class Transcript:
         self.mode = profile.transcript
         self.path: Path | None = None
         self.lock = threading.Lock()
+        self.persist = bool(getattr(profile, "log_persist", False) and self.mode == "text")
+        if self.persist:
+            if not profile.transcript_path:
+                raise ValueError("Persistent logging requires a filename")
+            self.mode = "off"
+            self.enable_text_log(profile.transcript_path)
+            return
         if self.mode == "off":
             return
         if self.mode == "encrypted" and not Dpapi.available():
@@ -41,17 +48,20 @@ class Transcript:
         self.path = base_dir / f"{safe_name}-{stamp}{suffix}"
 
     def enable_text_log(self, destination: str | None = None) -> Path:
-        path = resolve_log_path(destination)
+        path = resolve_log_path(destination).absolute()
         if path.exists() and path.is_dir():
             raise ValueError(f"{path} is a directory")
-        ensure_parent(path)
         with self.lock:
+            if self.mode == "text" and self.path is not None and self.path.resolve() == path.resolve():
+                return self.path
+            # Open before mutating state so unsuccessful switches preserve the old log.
+            ensure_parent(path)
+            with path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(f"\n--- log started {utc_now()} ---\n")
             self.mode = "text"
             self.path = path
             self.profile.transcript = "text"
             self.profile.transcript_path = str(path)
-            with path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(f"\n--- log started {utc_now()} ---\n")
         return path
 
     def disable(self) -> None:
@@ -60,6 +70,8 @@ class Transcript:
             self.path = None
             self.profile.transcript = "off"
             self.profile.transcript_path = ""
+            self.persist = False
+            self.profile.log_persist = False
 
     def write(self, direction: str, text: str, secret: bool = False) -> None:
         if self.mode == "off" or not self.path:

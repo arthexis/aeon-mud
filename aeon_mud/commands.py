@@ -6,10 +6,10 @@ import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from .config import *
-from .profiles import Profile
+from .profiles import Profile, ProfileStore
 from .input import KeyReader
 from .terminal import *
-from .transcript import Transcript
+from .transcript import Transcript, resolve_log_path
 from .realm_watches import save_realm_watches
 from .watch_events import DEFAULT_COOLDOWN, parse_sound, lcd_argv
 
@@ -378,13 +378,84 @@ def handle_session_profile_command(line: str, transcript: Transcript, ui: MudUi)
     return True
 
 
+def save_persistent_log_setting(transcript: Transcript) -> None:
+    """Persist only explicitly requested logging, not transient profile settings."""
+    store = ProfileStore()
+    name = transcript.profile.name
+    if name not in store.data["profiles"]:
+        raise ValueError("profile must be saved to persist logging")
+    stored = store.data["profiles"][name]
+    stored["log_persist"] = bool(transcript.persist)
+    if transcript.persist:
+        stored["transcript"] = "text"
+        stored["transcript_path"] = str(transcript.path)
+    elif stored.get("transcript") == "text":
+        stored["transcript"] = "off"
+        stored["transcript_path"] = ""
+    store.save()
+
+
+def handle_log_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
+    if line != "//log" and not line.startswith("//log "):
+        return False
+    try:
+        args = shlex.split(line[len("//log"):])
+        flags = {"--persist", "--switch", "--status", "--stop", "--off"}
+        unknown = [arg for arg in args if arg.startswith("--") and arg not in flags]
+        if unknown:
+            raise ValueError(f"unknown option: {unknown[0]}")
+        enabled = {arg for arg in args if arg in flags}
+        files = [arg for arg in args if arg not in flags]
+        if len(files) > 1:
+            raise ValueError("only one log filename can be specified")
+        if "--status" in enabled:
+            if len(enabled) > 1 or files:
+                raise ValueError("--status cannot be combined with other arguments")
+            confirm_local_command(transcript, ui, f"Log: {transcript.path or 'off'}; persist: {'on' if transcript.persist else 'off'}")
+            return True
+        if "--stop" in enabled or "--off" in enabled:
+            if enabled - {"--stop", "--off"}:
+                raise ValueError("--stop/--off cannot be combined with other flags")
+            if files and (transcript.path is None or transcript.path.resolve() != resolve_log_path(files[0]).absolute().resolve()):
+                raise ValueError("specified filename is not the active log")
+            previous = transcript.path
+            was_persistent = transcript.persist
+            transcript.disable()
+            if was_persistent:
+                save_persistent_log_setting(transcript)
+            confirm_local_command(transcript, ui, f"Logging stopped: {previous}" if previous else "Logging is already off")
+            return True
+        if not files and "--switch" in enabled:
+            raise ValueError("--switch requires a filename")
+        if transcript.mode == "text" and transcript.path is not None:
+            requested = resolve_log_path(files[0]).absolute() if files else transcript.path
+            if requested.resolve() != transcript.path.resolve() and "--switch" not in enabled:
+                raise ValueError("logging is already active; use --switch FILE to change destination")
+            if requested.resolve() == transcript.path.resolve() and "--switch" in enabled:
+                raise ValueError("--switch requires a different filename")
+            path = transcript.enable_text_log(str(requested))
+        else:
+            if transcript.mode != "off" and "--switch" not in enabled:
+                raise ValueError("another transcript is active; use --switch FILE")
+            path = transcript.enable_text_log(files[0] if files else None)
+        if "--persist" in enabled:
+            transcript.persist = True
+            transcript.profile.log_persist = True
+        if transcript.persist:
+            save_persistent_log_setting(transcript)
+        confirm_local_command(transcript, ui, f"Logging to {path}; persist: {'on' if transcript.persist else 'off'}")
+    except (OSError, ValueError) as exc:
+        confirm_local_command(transcript, ui, f"Log error: {exc}")
+    return True
+
+
 def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line == "//help":
         confirm_local_command(
             transcript, ui,
             "Local commands: //help, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
             "[--lcd TEXT] [--cooldown SECONDS] [--search] [--re] [--email] (yellow default), "
-            "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE|off|status], "
+            "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE] [--persist|--switch|--stop|--off|--status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."
         )
         return True
@@ -396,31 +467,12 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
         return True
     if handle_session_profile_command(line, transcript, ui):
         return True
-    if line != "//log" and not line.startswith("//log "):
-        if line.startswith("//"):
-            confirm_local_command(transcript, ui, f"Unknown local command: {line.split()[0]}. Use //help")
-            return True
-        return False
-    argument = line[len("//log"):].strip()
-    lowered = argument.lower()
-    if lowered in {"off", "stop", "close"}:
-        if transcript.path:
-            previous = transcript.path
-            transcript.disable()
-            confirm_local_command(transcript, ui, f"Logging stopped: {previous}")
-        else:
-            confirm_local_command(transcript, ui, "Logging is already off")
+    if handle_log_command(line, transcript, ui):
         return True
-    if lowered in {"status", "path", "?"}:
-        confirm_local_command(transcript, ui, f"Log: {transcript.path or 'off'}")
+    if line.startswith("//"):
+        confirm_local_command(transcript, ui, f"Unknown local command: {line.split()[0]}. Use //help")
         return True
-    try:
-        path = transcript.enable_text_log(argument or None)
-    except (OSError, ValueError) as exc:
-        confirm_local_command(transcript, ui, f"Log error: {exc}")
-    else:
-        confirm_local_command(transcript, ui, f"Logging to {path}")
-    return True
+    return False
 
 
 def split_composed_input(text: str) -> list[str]:
