@@ -554,3 +554,40 @@ rather than logging in again. Commands are only accepted while connected.
 A successful acknowledgement means the command was handed to the Telnet
 transport, **not** that the MUD accepted or executed it. A timeout after
 dispatch means the delivery outcome is unknown; avoid automatic retries.
+
+
+### Puppet observations and action cursors
+
+Each externally dispatched Puppet command batch receives an action ID and a
+monotonic session cursor. The receive stream is correlated by **arrival order**,
+not by assuming that every message is a response to a particular command.
+
+```sh
+aeon-puppet Hero look --capture
+aeon-puppet Hero --read-last
+aeon-puppet Hero --read ACTION_ID
+aeon-puppet Hero --read ACTION_ID --wait 3 --until-idle 0.5
+aeon-puppet Hero --read ACTION_ID --until-next-action
+aeon-puppet Hero --read-last --follow
+aeon-puppet Hero --read-last --json
+aeon-puppet Hero --after-cursor 132 --json
+```
+
+`--read-last` always resolves the most recent accepted action for this
+character. Repeated reads are snapshots from that same action; use
+`--after-cursor` to consume only new events. `--follow` polls for new
+events until interrupted. `--wait` sets a bounded observation deadline,
+and `--until-idle` can end the wait after a quiet interval. An idle gap
+does not guarantee the server has finished responding.
+
+The local socket protocol also accepts `op=send`, `op=read`,
+`op=read_last`, and `op=subscribe`. `PuppetClient` exposes the same
+commands through Python, including `send`, `read`, and `follow`.
+
+A bounded in-memory event journal runs even with `//log` disabled. When
+logging is enabled, an owner-only JSONL journal in the client configuration
+directory retains action metadata, event cursors, session IDs, and the
+corresponding log destination across fresh client sessions and
+`//log --switch`. The durable journal is size-bounded, older cursors can
+expire, and secret input is redacted. Correlated received messages may be
+unsolicited MUD output and are not proof of command causality.

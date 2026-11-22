@@ -29,6 +29,7 @@ class Transcript:
         self.mode = profile.transcript
         self.path: Path | None = None
         self.lock = threading.Lock()
+        self.observers = []
         self.persist = bool(getattr(profile, "log_persist", False) and self.mode == "text")
         if self.persist:
             if not profile.transcript_path:
@@ -74,6 +75,9 @@ class Transcript:
             self.profile.log_persist = False
 
     def write(self, direction: str, text: str, secret: bool = False) -> None:
+        for observer in tuple(self.observers):
+            observer(direction, text, secret=secret,
+                     log_path=self.path if self.mode != "off" else None)
         if self.mode == "off" or not self.path:
             return
         if self.mode == "text":

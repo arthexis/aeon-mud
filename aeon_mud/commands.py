@@ -511,6 +511,8 @@ def send_composed_input(
                     try:
                         puppet = PuppetServer(controller.character_login[0])
                         puppet.start()
+                        if isinstance(transcript, Transcript):
+                            puppet.attach(transcript)
                         controller.puppet = puppet
                     except (OSError, RuntimeError, ValueError) as exc:
                         confirm_local_command(transcript, ui, f"Puppet error: {exc}")
@@ -518,6 +520,8 @@ def send_composed_input(
                         confirm_local_command(transcript, ui, f"Puppet enabled: {puppet.path}")
             elif action == "off":
                 if controller.puppet is not None:
+                    if isinstance(transcript, Transcript):
+                        controller.puppet.detach(transcript)
                     controller.puppet.close()
                     controller.puppet = None
                 confirm_local_command(transcript, ui, "Puppet disabled")

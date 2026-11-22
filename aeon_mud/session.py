@@ -237,6 +237,7 @@ class SessionController:
 
     def close(self) -> None:
         if self.puppet is not None:
+            self.puppet.detach(self.transcript)
             self.puppet.close()
             self.puppet = None
         with self.lock:
