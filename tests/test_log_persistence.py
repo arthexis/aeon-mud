@@ -72,5 +72,46 @@ class LogOptionsTests(unittest.TestCase):
         self.assertFalse(self.transcript.persist)
 
 
+    def test_relative_log_resumes_from_other_working_directory(self):
+        import os
+        previous = Path.cwd()
+        first = self.root / "cwd-first"
+        second = self.root / "cwd-second"
+        first.mkdir()
+        second.mkdir()
+        try:
+            os.chdir(first)
+            self.cmd("//log relative.log --persist")
+            expected = first / "relative.log"
+            self.assertEqual(ProfileStore(self.profiles).get("log-test").transcript_path, str(expected))
+            os.chdir(second)
+            recovered = Transcript(ProfileStore(self.profiles).get("log-test"))
+            self.assertEqual(recovered.path, expected)
+            recovered.write("recv", "from new cwd")
+            self.assertIn("from new cwd", expected.read_text())
+            self.assertFalse((second / "relative.log").exists())
+        finally:
+            os.chdir(previous)
+
+    def test_stop_rejects_unrelated_destination(self):
+        first = str(self.root / "one.log")
+        second = str(self.root / "two.log")
+        self.cmd(f"//log {first} --persist")
+        self.cmd(f"//log --stop {second}")
+        self.assertEqual(self.transcript.path, Path(first))
+        self.assertTrue(self.transcript.persist)
+
+    def test_other_transcript_mode_requires_explicit_switch(self):
+        self.transcript.mode = "plain"
+        self.transcript.path = self.root / "existing.jsonl"
+        target = self.root / "text.log"
+        self.cmd(f"//log {target}")
+        self.assertEqual(self.transcript.mode, "plain")
+        self.assertFalse(target.exists())
+        self.cmd(f"//log --switch {target}")
+        self.assertEqual(self.transcript.mode, "text")
+        self.assertEqual(self.transcript.path, target)
+
+
 if __name__ == "__main__":
     unittest.main()
