@@ -29,6 +29,7 @@ class Transcript:
         self.mode = profile.transcript
         self.path: Path | None = None
         self.lock = threading.Lock()
+        self.observers = []
         self.persist = bool(getattr(profile, "log_persist", False) and self.mode == "text")
         if self.persist:
             if not profile.transcript_path:
@@ -73,34 +74,48 @@ class Transcript:
             self.persist = False
             self.profile.log_persist = False
 
+    def _notify(self, direction: str, text: str, secret: bool,
+                log_path: Path | None, log_offset: int | None = None) -> None:
+        # Never create a plaintext Puppet sidecar for encrypted transcripts.
+        if self.mode == "encrypted":
+            log_path, log_offset = None, None
+        for observer in tuple(self.observers):
+            observer(direction, text, secret=secret, log_path=log_path,
+                     log_offset=log_offset)
+
     def write(self, direction: str, text: str, secret: bool = False) -> None:
-        if self.mode == "off" or not self.path:
-            return
-        if self.mode == "text":
-            clean_text = "[redacted]" if secret else strip_ansi(text)
-            with self.lock:
-                ensure_parent(self.path)
-                with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+        with self.lock:
+            if self.mode == "off" or not self.path:
+                self._notify(direction, text, secret, None)
+                return
+            path = self.path
+            if self.mode == "text":
+                clean_text = "[redacted]" if secret else strip_ansi(text)
+                ensure_parent(path)
+                with path.open("a", encoding="utf-8", newline="\n") as handle:
                     if direction == "send":
                         handle.write(f"\n> {clean_text}\n")
                     else:
                         handle.write(clean_text)
-            return
-        payload = {
-            "ts": utc_now(),
-            "direction": direction,
-            "text": "[redacted]" if secret else text,
-            "secret": bool(secret),
-        }
-        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        with self.lock:
-            ensure_parent(self.path)
-            with self.path.open("ab") as handle:
+                    offset = handle.tell()
+                self._notify(direction, text, secret, path, offset)
+                return
+            payload = {
+                "ts": utc_now(),
+                "direction": direction,
+                "text": "[redacted]" if secret else text,
+                "secret": bool(secret),
+            }
+            raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            ensure_parent(path)
+            with path.open("ab") as handle:
                 if self.mode == "encrypted":
                     encrypted = Dpapi.protect(raw)
                     handle.write(base64.b64encode(encrypted) + b"\n")
                 else:
                     handle.write(raw + b"\n")
+                offset = handle.tell()
+            self._notify(direction, text, secret, path, offset)
 
 
 def decrypt_transcript(source: Path, destination: Path | None) -> None:

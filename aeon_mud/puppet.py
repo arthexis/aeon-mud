@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from .puppet_journal import PuppetJournal
 
 MAX_REQUEST = 65536
 MAX_COMMANDS = 32
@@ -62,6 +63,7 @@ class PuppetRequest:
     commands: list[str]
     done: threading.Event = field(default_factory=threading.Event)
     error: str | None = None
+    action: dict | None = None
     started: bool = False
     cancelled: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -91,6 +93,8 @@ class PuppetServer:
         self.listener: socket.socket | None = None
         self.worker: threading.Thread | None = None
         self.bound_inode: int | None = None
+        self.journal: PuppetJournal | None = None
+        self.connection_slots = threading.BoundedSemaphore(8)
 
     def start(self) -> None:
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -118,6 +122,24 @@ class PuppetServer:
                 continue
             except OSError:
                 break
+            if not self.connection_slots.acquire(blocking=False):
+                with conn:
+                    try:
+                        conn.sendall(b'{"ok": false, "error": "too many active Puppet clients"}\n')
+                    except OSError:
+                        pass
+                continue
+            worker = threading.Thread(target=self._serve_connection,
+                                      args=(conn,), name="aeon-puppet-client", daemon=True)
+            try:
+                worker.start()
+            except BaseException:
+                self.connection_slots.release()
+                conn.close()
+                raise
+
+    def _serve_connection(self, conn: socket.socket) -> None:
+        try:
             with conn:
                 conn.settimeout(5.0)
                 try:
@@ -128,7 +150,21 @@ class PuppetServer:
                             raise ValueError("request too large or incomplete")
                         payload.extend(part)
                     body = json.loads(bytes(payload).split(b"\n", 1)[0])
-                    commands = body.get("commands") if isinstance(body, dict) else None
+                    if not isinstance(body, dict):
+                        raise ValueError("expected JSON object")
+                    operation = body.get("op", "send")
+                    if operation in {"read", "read_last", "subscribe"}:
+                        if self.journal is None:
+                            raise ValueError("Puppet observation not enabled")
+                        result = {"ok": True, **self.journal.read(
+                            action_id=body.get("action_id"), last=operation == "read_last",
+                            after=body.get("after"), until_next=bool(body.get("until_next", False)),
+                            wait=float(body.get("wait", 0)), idle=float(body.get("idle", 0)))}
+                        conn.sendall((json.dumps(result) + "\n").encode())
+                        return
+                    if operation != "send":
+                        raise ValueError("unknown operation")
+                    commands = body.get("commands")
                     if not isinstance(commands, list) or not 1 <= len(commands) <= MAX_COMMANDS:
                         raise ValueError("expected 1-32 commands")
                     if any(not isinstance(cmd, str) or not cmd or "\n" in cmd or "\r" in cmd or len(cmd) > 4096 for cmd in commands):
@@ -139,13 +175,20 @@ class PuppetServer:
                         if request.cancel_if_pending():
                             raise ValueError("request expired before dispatch")
                         raise ValueError("request was dispatched; delivery outcome unknown")
-                    result = {"ok": request.error is None, "error": request.error}
+                    result = {"ok": request.error is None, "error": request.error,
+                              "action_id": request.action["action_id"] if request.action else None,
+                              "cursor_start": request.action["seq"] if request.action else None,
+                              "session_id": request.action["session_id"] if request.action else None}
                 except (ValueError, TypeError, KeyError, json.JSONDecodeError, queue.Full, socket.timeout) as exc:
                     result = {"ok": False, "error": str(exc) or "queue full"}
                 try:
                     conn.sendall((json.dumps(result) + "\n").encode())
                 except OSError:
                     pass
+
+
+        finally:
+            self.connection_slots.release()
 
     def drain(self, controller: object) -> None:
         while True:
@@ -160,6 +203,16 @@ class PuppetServer:
                     raise RuntimeError("puppet request expired")
                 if controller.current_connection() is None:
                     raise RuntimeError("MUD session disconnected")
+                if self.journal is not None:
+                    transcript = getattr(controller, "transcript", None)
+                    if transcript is not None:
+                        # Serialize action boundary against incoming transcript writes.
+                        with transcript.lock:
+                            path = transcript.path if transcript.mode in {"text", "plain"} else None
+                            request.action = self.journal.start_action(
+                                request.commands, durable=path is not None, log_path=path)
+                    else:
+                        request.action = self.journal.start_action(request.commands)
                 for idx, command in enumerate(request.commands):
                     if idx:
                         # Mirror normal multiline paste pacing.
@@ -189,6 +242,21 @@ class PuppetServer:
             self.worker.join(timeout=1.0)
         self._unlink_owned_socket()
 
+    def attach(self, transcript) -> None:
+        if self.journal is not None:
+            raise RuntimeError("Puppet already attached")
+        journal = PuppetJournal(self.path.stem.removeprefix("puppet-"))
+        self.journal = journal
+        transcript.observers.append(journal.record)
+
+    def detach(self, transcript) -> None:
+        if self.journal is not None:
+            try:
+                transcript.observers.remove(self.journal.record)
+            except ValueError:
+                pass
+            self.journal = None
+
     def _unlink_owned_socket(self) -> None:
         # Never unlink another process's replacement or a symlink.
         if self.bound_inode is None:
@@ -203,34 +271,163 @@ class PuppetServer:
             self.bound_inode = None
 
 
+def parse_duration(value: str) -> float:
+    """Accept seconds, e.g. 2, 2s, 500ms, or 1m."""
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m)?", value.strip())
+    if not match:
+        raise argparse.ArgumentTypeError("duration must be a nonnegative number with ms, s, or m suffix")
+    amount = float(match.group(1))
+    suffix = match.group(2)
+    seconds = amount / 1000 if suffix == "ms" else amount * 60 if suffix == "m" else amount
+    if seconds > 10:
+        raise argparse.ArgumentTypeError("maximum observation wait is 10 seconds per request")
+    return seconds
+
+
+class PuppetClient:
+    """Reusable structured client for a character's local Puppet socket."""
+
+    def __init__(self, character: str):
+        self.path = puppet_socket_path(character)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def request(self, payload: dict):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(18)
+            sock.connect(str(self.path))
+            sock.sendall((json.dumps(payload) + "\n").encode())
+            response = bytearray()
+            while b"\n" not in response:
+                if len(response) > MAX_REQUEST:
+                    raise RuntimeError("Puppet response exceeded maximum size")
+                part = sock.recv(4096)
+                if not part:
+                    raise RuntimeError("session closed without acknowledgement")
+                response.extend(part)
+        result = json.loads(bytes(response).split(b"\n", 1)[0])
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError(result.get("error") if isinstance(result, dict) else "invalid Puppet response")
+        return result
+
+    def send(self, command: str, prefix: str = ""):
+        return self.request({"op": "send", "commands": [prefix + command]})
+
+    def read(self, action_id: str | None = None, *, last: bool = False,
+             after: int | None = None, wait: float = 0, idle: float = 0,
+             until_next: bool = False):
+        return self.request({"op": "read_last" if last else "read",
+            "action_id": action_id, "after": after, "wait": wait,
+            "idle": idle, "until_next": until_next})
+
+    def read_all(self, action_id: str | None = None, *, last: bool = False,
+                 after: int | None = None, wait: float = 0, idle: float = 0,
+                 until_next: bool = False):
+        """Collect all available pages without losing the original action boundary."""
+        current = after
+        events = []
+        pages = 0
+        while True:
+            result = self.read(action_id, last=last, after=current,
+                               wait=wait if pages == 0 else 0,
+                               idle=idle if pages == 0 else 0,
+                               until_next=until_next)
+            events.extend(result["events"])
+            action_id = result.get("action_id") or action_id
+            last = False
+            if not result.get("more"):
+                return {**result, "events": events}
+            if result["cursor_end"] == current:
+                raise RuntimeError("Puppet observation cursor did not advance")
+            current = result["cursor_end"]
+            pages += 1
+            if pages > 256:
+                raise RuntimeError("Puppet observation pagination limit exceeded")
+
+    def follow(self, action_id: str | None = None, *, last: bool = False):
+        result = self.read_all(action_id, last=last)
+        for event in result["events"]:
+            yield event
+        cursor = result["cursor_end"]
+        while True:
+            result = self.read_all(after=cursor, wait=2)
+            for event in result["events"]:
+                yield event
+            cursor = result["cursor_end"]
+
+
+def _print_observation(result: dict, *, structured: bool):
+    if structured:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        for event in result["events"]:
+            print(event["text"], end="", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="aeon-puppet", description="Send commands to an enabled local character session")
-    parser.add_argument("--prefix", default="", help="Prepend this literal text to every command")
-    parser.add_argument("character", help="Character selected by aeon-mud connect --login")
-    parser.add_argument("command", nargs="*", help="Command words; if omitted, read lines from stdin")
-    args = parser.parse_args(argv)
+    parser = argparse.ArgumentParser(prog="aeon-puppet", description="Send commands and observe MUD output")
+    parser.add_argument("--prefix", default="")
+    parser.add_argument("--capture", action="store_true", help="Print action ID and starting cursor")
+    parser.add_argument("--read", metavar="ACTION_ID", help="Read output since a Puppet action")
+    parser.add_argument("--read-last", action="store_true", help="Read output since the last Puppet action")
+    parser.add_argument("--follow", action="store_true", help="Stream new received output")
+    parser.add_argument("--wait", type=parse_duration, default=0, metavar="DURATION")
+    parser.add_argument("--until-idle", type=parse_duration, default=0, metavar="DURATION")
+    parser.add_argument("--until-next-action", action="store_true")
+    parser.add_argument("--after-cursor", type=int)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("character")
+    parser.add_argument("command", nargs="*")
+    args = parser.parse_intermixed_args(argv)
     try:
-        path = puppet_socket_path(args.character)
+        client = PuppetClient(args.character)
+        observation = args.read is not None or args.read_last or args.after_cursor is not None
+        wait = args.wait or (10.0 if args.until_idle else 0.0)
+        if observation:
+            if args.command or args.prefix or (args.read and args.read_last):
+                parser.error("read operations cannot include commands, prefix or conflicting read modes")
+            result = client.read_all(args.read, last=args.read_last, after=args.after_cursor,
+                                     wait=wait, idle=args.until_idle,
+                                     until_next=args.until_next_action)
+            _print_observation(result, structured=args.json)
+            if args.follow:
+                cursor = result["cursor_end"]
+                while True:
+                    result = client.read_all(after=cursor, wait=2)
+                    _print_observation(result, structured=args.json)
+                    cursor = result["cursor_end"]
+            return 0
+        if args.follow:
+            parser.error("--follow requires --read, --read-last or --after-cursor")
         lines = [" ".join(args.command)] if args.command else [line.rstrip("\n") for line in sys.stdin]
         commands = [args.prefix + line for line in lines if line]
         if not commands:
             parser.error("no commands supplied")
         if len(commands) > MAX_COMMANDS:
             parser.error(f"maximum {MAX_COMMANDS} commands per request")
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(18)
-            sock.connect(str(path))
-            sock.sendall((json.dumps({"commands": commands}) + "\n").encode())
-            response = bytearray()
-            while b"\n" not in response and len(response) <= MAX_REQUEST:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    raise RuntimeError("session closed without acknowledgement")
-                response.extend(chunk)
-        reply = json.loads(bytes(response).split(b"\n", 1)[0])
-        if not reply.get("ok"):
-            raise RuntimeError(reply.get("error") or "command rejected")
+        result = client.request({"op": "send", "commands": commands})
+        if wait:
+            if not result.get("action_id"):
+                raise RuntimeError("action has no capture ID")
+            observed = client.read_all(result["action_id"], wait=wait, idle=args.until_idle,
+                                       until_next=args.until_next_action)
+            if args.json:
+                print(json.dumps({"action": result, "observation": observed}, ensure_ascii=False))
+            else:
+                if args.capture:
+                    print(result["action_id"])
+                _print_observation(observed, structured=False)
+        elif args.json:
+            print(json.dumps(result, ensure_ascii=False))
+        elif args.capture:
+            print(result.get("action_id") or "")
         return 0
+    except KeyboardInterrupt:
+        return 130
     except (OSError, ValueError, RuntimeError) as exc:
         print(f"aeon-puppet: {exc}", file=sys.stderr)
         return 1
