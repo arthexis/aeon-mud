@@ -59,6 +59,8 @@ class JournalTests(unittest.TestCase):
         self.assertEqual([v["text"] for v in output["events"]], ["first response", "second response"])
         self.assertEqual(output["events"][0]["log_path"], str(first))
         self.assertEqual(output["events"][1]["log_path"], str(second))
+        self.assertGreater(output["events"][0]["log_offset"], 0)
+        self.assertGreater(output["events"][1]["log_offset"], 0)
 
     def test_disabled_log_observation_does_not_create_sidecar(self):
         transcript = Transcript(Profile(name="demo", host="localhost"))
@@ -78,6 +80,29 @@ class JournalTests(unittest.TestCase):
     def test_unknown_action_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown or expired"):
             PuppetJournal("Hero").read(action_id="missing")
+
+
+    def test_pagination_is_bounded_without_losing_events(self):
+        journal = PuppetJournal("Hero")
+        action = journal.start_action(["look"])
+        for number in range(45):
+            journal.record("recv", f"line {number}\n")
+        seen = []
+        cursor = None
+        for _ in range(4):
+            result = journal.read(action_id=action["action_id"], after=cursor)
+            seen.extend(row["text"] for row in result["events"])
+            cursor = result["cursor_end"]
+            if not result["more"]:
+                break
+        self.assertEqual(seen, [f"line {n}\n" for n in range(45)])
+
+    def test_expired_cursor_is_rejected(self):
+        journal = PuppetJournal("Hero")
+        for index in range(4100):
+            journal.record("recv", str(index))
+        with self.assertRaisesRegex(ValueError, "expired"):
+            journal.read(after=0)
 
 
 @unittest.skipUnless(os.name == "posix", "Unix sockets only")
@@ -129,6 +154,42 @@ class SocketObservationTests(unittest.TestCase):
             with mock.patch("sys.stdout", stdout):
                 self.assertEqual(main(["Hero", "--read-last"]), 0)
             self.assertIn("You see a tavern", stdout.getvalue())
+        finally:
+            server.detach(transcript)
+            server.close()
+
+
+    def test_long_observation_does_not_block_other_clients(self):
+        transcript = Transcript(Profile(name="demo", host="localhost"))
+        server = PuppetServer("Hero")
+        server.attach(transcript)
+        server.start()
+        class Controller:
+            profile = type("Profile", (), {"paste_line_delay": 0})()
+            def current_connection(self):
+                return object()
+            def send_line(self, line, **kwargs):
+                transcript.write("send", line)
+        client = PuppetClient("Hero")
+        read_results = []
+        reading = threading.Thread(target=lambda: read_results.append(client.read(after=0, wait=1)))
+        reading.start()
+        time.sleep(.12)
+        output = []
+        sent = threading.Thread(target=lambda: output.append(client.send("look")))
+        start = time.monotonic()
+        sent.start()
+        deadline = start + .75
+        while sent.is_alive() and time.monotonic() < deadline:
+            server.drain(Controller())
+            time.sleep(.01)
+        sent.join(1)
+        reading.join(2)
+        try:
+            self.assertFalse(sent.is_alive())
+            self.assertLess(time.monotonic() - start, 1.7)
+            self.assertTrue(output[0]["action_id"])
+            self.assertTrue(read_results)
         finally:
             server.detach(transcript)
             server.close()
