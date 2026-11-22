@@ -151,6 +151,7 @@ class SessionController:
         self.ui = ui
         self.password = password
         self.character_login: tuple[str, str] | None = None
+        self.puppet = None
         self.tail = ""
         self.sent_username = False
         self.sent_password = False
@@ -235,6 +236,9 @@ class SessionController:
         return True
 
     def close(self) -> None:
+        if self.puppet is not None:
+            self.puppet.close()
+            self.puppet = None
         with self.lock:
             self._closed = True
             # Release pending login workers rather than waiting out their
@@ -614,6 +618,8 @@ def session_loop(
         if character is not None:
             controller.start_login_worker()
         while not stop.is_set():
+            if controller.puppet is not None:
+                controller.puppet.drain(controller)
             controller.maybe_send_keepalive()
             key = reader.read_key(timeout=0.1)
             if key is None:
