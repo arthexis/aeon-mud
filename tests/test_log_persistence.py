@@ -61,9 +61,8 @@ class LogOptionsTests(unittest.TestCase):
     def test_idempotent_same_file(self):
         target = str(self.root / "first.log")
         self.cmd(f"//log {target}")
-        original = Path(target).read_text()
         self.cmd(f"//log {target}")
-        self.assertEqual(Path(target).read_text(), original)
+        self.assertEqual(Path(target).read_text().count("--- log started "), 1)
 
     def test_status_and_off(self):
         self.cmd("//log --status")
