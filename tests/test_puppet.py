@@ -136,7 +136,7 @@ class PuppetTests(unittest.TestCase):
             def current_connection(self): return object()
             def send_line(self, line, **kwargs): sent.append(line)
         try:
-            with mock.patch("sys.stdin", io.StringIO("first\\nsecond\\n")):
+            with mock.patch("sys.stdin", io.StringIO("first\nsecond\n")):
                 self.assertEqual(self.run_with_pump(server, Controller(), ["--prefix", "say ", "hero"]), [0])
             self.assertEqual(sent, ["say first", "say second"])
         finally:
@@ -154,7 +154,7 @@ class PuppetTests(unittest.TestCase):
                 raise OSError("connection failed")
         import io
         try:
-            with mock.patch("sys.stdin", io.StringIO("first\\nsecond\\n")):
+            with mock.patch("sys.stdin", io.StringIO("first\nsecond\n")):
                 self.assertEqual(self.run_with_pump(server, Controller(), ["hero"]), [1])
             self.assertEqual(sent, ["first"])
         finally:
