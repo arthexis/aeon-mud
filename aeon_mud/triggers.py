@@ -362,12 +362,13 @@ class TriggerEngine:
             # Never dispatch queued commands during the character login handshake.
             if not getattr(controller, "trigger_ready", True):
                 return
-            pending = self.pending[0]
-            if self.clock() < pending.due:
+            # An unrelated delayed trigger must not stall ready actions.
+            pending = next((item for item in self.pending if item.due <= self.clock()), None)
+            if pending is None:
                 return
             if controller.current_connection() is None:
                 pending.receipt.update(status="failed", error="session disconnected")
-                self.pending.popleft()
+                self.pending.remove(pending)
                 self._persist_receipt(pending.rule_id)
                 return
             if pending.index == 0 and self.journal is not None:
@@ -383,7 +384,7 @@ class TriggerEngine:
                             matched_text=pending.receipt["matched_text"])
                     except (OSError, ValueError, RuntimeError) as exc:
                         pending.receipt.update(status="failed", error=f"action journal: {exc}")
-                        self.pending.popleft()
+                        self.pending.remove(pending)
                         self._persist_receipt(pending.rule_id)
                         return
                 pending.receipt["action_id"] = action["action_id"]
@@ -392,12 +393,12 @@ class TriggerEngine:
                 controller.send_line(command, secret=False, remember=False)
             except (OSError, RuntimeError, ValueError) as exc:
                 pending.receipt.update(status="outcome_unknown", error=str(exc))
-                self.pending.popleft()
+                self.pending.remove(pending)
             else:
                 pending.index += 1
                 pending.receipt["status"] = "sent" if pending.index == len(pending.commands) else "sending"
                 if pending.index == len(pending.commands):
-                    self.pending.popleft()
+                    self.pending.remove(pending)
                 else:
                     pending.due = self.clock() + controller.profile.paste_line_delay
             self._persist_receipt(pending.rule_id)
