@@ -639,3 +639,21 @@ sends without rearming rules. The session event journal records
 `origin=trigger`, the trigger ID/name, captures, and an action ID, so
 `aeon-puppet CHARACTER --read-last` can observe the output after a trigger
 when Puppet is enabled. A MUD's unsolicited output may still be interleaved.
+
+### Human-paced Puppet and trigger reactions
+
+Direct `aeon-puppet Hero look` calls now wait a short, randomized interval
+before their first command. Use `aeon-puppet --immediate Hero look`
+to bypass that automatic delay. The Python client also supports
+`PuppetClient("Hero").send("look", immediate=True)`.
+
+One-shot triggers similarly wait for a randomized reaction interval based
+on the **actual text matched** by the pattern (the regex match's group 0,
+not the entire received line if `--search` is in use). A base 150 ms
+reaction plus random 0–300 ms jitter and 15–25 ms per matched character is
+capped at 3 seconds. The value is sampled once per action and recorded in
+the trigger receipt as `reaction_delay_ms`, along with `matched_length`.
+A user-supplied `//trigger ... --delay 500ms` is added to that reaction
+delay. `//trigger ... --immediate` bypasses only the automatic reaction,
+not an explicit `--delay`. After the first command, multi-command batches
+retain their original paste pacing; the reaction is not resampled.
