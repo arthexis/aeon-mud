@@ -579,7 +579,7 @@ def command_self_test(_args: argparse.Namespace) -> None:
             assert transcript.path == Path("named.log")
             transcript.write("recv", "named")
             assert "named" in Path("named.log").read_text(encoding="utf-8")
-            assert handle_local_command("//log off", transcript, ui) is True
+            assert handle_local_command("//log --off", transcript, ui) is True
             assert transcript.path is None
 
             class CaptureTransport(Transport):
