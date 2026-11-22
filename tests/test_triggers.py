@@ -233,5 +233,16 @@ class TriggerTests(unittest.TestCase):
         self.assertEqual(TriggerEngine(self.profile, "Hero").status(rule.id)["state"], "spent")
 
 
+    def test_delayed_rule_does_not_stall_immediate_trigger(self):
+        self.engine.add("Door", ["north"], delay=5)
+        self.engine.add("Bell", ["wake"])
+        self.engine.feed("Door\nBell\n")
+        self.engine.drain(self.controller)
+        self.assertEqual(self.controller.sent, ["wake"])
+        self.clock[0] += 5
+        self.engine.drain(self.controller)
+        self.assertEqual(self.controller.sent, ["wake", "north"])
+
+
 if __name__ == "__main__":
     unittest.main()
