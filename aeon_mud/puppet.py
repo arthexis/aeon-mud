@@ -161,7 +161,7 @@ class PuppetServer:
                             after=body.get("after"), until_next=bool(body.get("until_next", False)),
                             wait=float(body.get("wait", 0)), idle=float(body.get("idle", 0)))}
                         conn.sendall((json.dumps(result) + "\n").encode())
-                        continue
+                        return
                     if operation != "send":
                         raise ValueError("unknown operation")
                     commands = body.get("commands")
