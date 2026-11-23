@@ -7,11 +7,12 @@ name = "aeon-mud"
 version = "0.1.0"
 description = "Standalone line-oriented Telnet client for MUD sessions."
 requires-python = ">=3.10"
-dependencies = ["cryptography>=41; platform_system != \"Windows\""]
+dependencies = ["cryptography>=41; platform_system != \"Windows\"", "PyYAML>=6.0,<7"]
 
 [project.scripts]
 aeon-mud = "aeon_mud.cli:main"
 aeon-puppet = "aeon_mud.puppet:main"
+aeon-machine = "aeon_mud.machines:main"
 
 [tool.setuptools]
 py-modules = ["aeon_mud_client"]

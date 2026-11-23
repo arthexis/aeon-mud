@@ -1,0 +1,45 @@
+# Stage 1 reference fixture. Validation and pure simulation only; no live sends.
+name: merchant
+version: 1
+scope: character
+initial: idle
+variables:
+  item: sword
+  max_price: 100
+states:
+  idle:
+    on_enter:
+      - send: "list"
+    transitions:
+      - match: "Welcome to my shop"
+        goto: awaiting_price
+        actions:
+          - send: "value {item}"
+  awaiting_price:
+    timeout: 10s
+    transitions:
+      - match: "The [item] costs [price] coins"
+        when: "int(price) <= max_price"
+        goto: purchasing
+        actions:
+          - send: "buy {item}"
+      - match: "The [item] costs [price] coins"
+        goto: leaving
+        actions:
+          - send: "say Too expensive"
+    on_timeout:
+      goto: failed
+      actions:
+        - notify: "Merchant did not respond"
+  purchasing:
+    transitions:
+      - match: "You purchase [item]"
+        goto: completed
+  leaving:
+    on_enter:
+      - send: "leave"
+    final: true
+  completed:
+    final: true
+  failed:
+    final: true
