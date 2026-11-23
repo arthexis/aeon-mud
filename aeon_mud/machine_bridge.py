@@ -336,14 +336,15 @@ class MachineBridge:
             for run in self.runs.values():
                 if run.machine.status != "running" and run.pending is None:
                     continue
-                had_pending = run.pending is not None
+                pending = run.pending
+                had_pending = pending is not None
                 if had_pending:
                     self.scheduler.cancel(origin="machine",
                                           predicate=lambda j: j.metadata.get("machine_id") == run.id,
                                           reason="session disconnected")
-                    run.pending.receipt["status"] = (
-                        "outcome_unknown" if run.pending.index else "cancelled")
-                    run.pending.receipt["error"] = "session disconnected"
+                    pending.receipt["status"] = (
+                        "outcome_unknown" if pending.index else "cancelled")
+                    pending.receipt["error"] = "session disconnected"
                     run.pending = None
                 if run.machine.status == "running" or had_pending:
                     run.machine.status = "recovery_required"
