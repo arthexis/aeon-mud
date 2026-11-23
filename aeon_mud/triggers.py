@@ -220,29 +220,24 @@ class TriggerEngine:
     def modify(self, selector: str, operation: str) -> Trigger:
         with self.lock:
             rule = self._find(selector)
-            if operation == "remove":
-                self.rules.remove(rule)
+            if operation == "on":
+                if rule.state == "spent":
+                    raise ValueError("spent triggers require --rearm")
+                rule.state = "armed"
+            elif operation in {"remove", "off", "rearm"}:
                 self.pending = deque(x for x in self.pending if x.rule_id != rule.id)
-                self.scheduler.cancel(origin="trigger", predicate=lambda j: j.metadata.get("trigger_id") == rule.id,
-                                      reason="trigger "+operation)
-            else:
-                before = rule.state
-                if operation == "off":
+                self.scheduler.cancel(
+                    origin="trigger",
+                    predicate=lambda j: j.metadata.get("trigger_id") == rule.id,
+                    reason="trigger " + operation)
+                if operation == "remove":
+                    self.rules.remove(rule)
+                elif operation == "off":
                     rule.state = "disabled"
-                    self.pending = deque(x for x in self.pending if x.rule_id != rule.id)
-                self.scheduler.cancel(origin="trigger", predicate=lambda j: j.metadata.get("trigger_id") == rule.id,
-                                      reason="trigger "+operation)
-                elif operation == "on":
-                    if rule.state == "spent":
-                        raise ValueError("spent triggers require --rearm")
-                    rule.state = "armed"
-                elif operation == "rearm":
-                    rule.state, rule.receipt = "armed", None
-                    self.pending = deque(x for x in self.pending if x.rule_id != rule.id)
-                self.scheduler.cancel(origin="trigger", predicate=lambda j: j.metadata.get("trigger_id") == rule.id,
-                                      reason="trigger "+operation)
                 else:
-                    raise ValueError("invalid trigger action")
+                    rule.state, rule.receipt = "armed", None
+            else:
+                raise ValueError("invalid trigger action")
             if rule.persist:
                 self._save()
             return rule
