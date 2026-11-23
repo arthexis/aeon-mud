@@ -101,6 +101,7 @@ class PuppetServer:
         self.bound_inode: int | None = None
         self.journal: PuppetJournal | None = None
         self.owns_journal = False
+        self.machine_bridge = None
         self.connection_slots = threading.BoundedSemaphore(8)
 
     def start(self) -> None:
@@ -168,6 +169,20 @@ class PuppetServer:
                             after=body.get("after"), until_next=bool(body.get("until_next", False)),
                             wait=float(body.get("wait", 0)), idle=float(body.get("idle", 0)))}
                         conn.sendall((json.dumps(result) + "\n").encode())
+                        return
+                    if operation == "machine":
+                        bridge = self.machine_bridge
+                        if bridge is None:
+                            raise ValueError("machine bridge unavailable")
+                        command = body.get("command")
+                        arguments = body.get("args", [])
+                        if not isinstance(command, str) or not isinstance(arguments, list):
+                            raise ValueError("machine requires command and args array")
+                        result = {"ok": True, "machine": bridge.execute(command, arguments)}
+                        encoded = (json.dumps(result, ensure_ascii=False) + "\n").encode()
+                        if len(encoded) > MAX_REQUEST:
+                            raise ValueError("machine response too large; narrow the trace")
+                        conn.sendall(encoded)
                         return
                     if operation != "send":
                         raise ValueError("unknown operation")
@@ -338,6 +353,9 @@ class PuppetClient:
         if not isinstance(result, dict) or not result.get("ok"):
             raise RuntimeError(result.get("error") if isinstance(result, dict) else "invalid Puppet response")
         return result
+
+    def machine(self, command: str, *args: str) -> dict:
+        return self.request({"op": "machine", "command": command, "args": list(args)})["machine"]
 
     def send(self, command: str, prefix: str = "", *, immediate: bool = False):
         return self.request({"op": "send", "commands": [prefix + command],

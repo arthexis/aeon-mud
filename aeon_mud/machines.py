@@ -12,6 +12,7 @@ import json
 import math
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 
@@ -461,16 +462,38 @@ class MachineInstance:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="aeon-machine", description="Validate declarative MUD machines (Stage 1)")
-    parser.add_argument("operation", choices=["validate"])
-    parser.add_argument("file")
-    args = parser.parse_args(argv)
+    """Validate locally or access an enabled character's owner-only Puppet socket."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "validate":
+        parser = argparse.ArgumentParser(prog="aeon-machine validate")
+        parser.add_argument("operation", choices=["validate"])
+        parser.add_argument("file")
+        args = parser.parse_args(arguments)
+        try:
+            definition = load_machine(args.file)
+        except (OSError, MachineError) as exc:
+            parser.exit(1, f"aeon-machine: {exc}\n")
+        print(json.dumps({"valid": True, "name": definition.name,
+                          "states": len(definition.states), "initial": definition.initial}))
+        return 0
+    parser = argparse.ArgumentParser(
+        prog="aeon-machine",
+        description="Control in-memory MUD machines over the owner-only Puppet socket. "
+                    "Use 'aeon-machine validate FILE' for offline validation.")
+    parser.add_argument("character", help="Active character with //puppet on")
+    parser.add_argument("operation", choices=[
+        "load", "list", "start", "status", "pause", "resume",
+        "stop", "inspect", "trace", "step",
+    ])
+    parser.add_argument("args", nargs=argparse.REMAINDER)
+    args = parser.parse_args(arguments)
     try:
-        definition = load_machine(args.file)
-    except (OSError, MachineError) as exc:
-        parser.exit(1, f"aeon-machine: {exc}\n")
-    print(json.dumps({"valid": True, "name": definition.name,
-                      "states": len(definition.states), "initial": definition.initial}))
+        from .puppet import PuppetClient
+        result = PuppetClient(args.character).machine(args.operation, *args.args)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"aeon-machine: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
