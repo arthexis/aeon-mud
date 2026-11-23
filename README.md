@@ -657,3 +657,35 @@ A user-supplied `//trigger ... --delay 500ms` is added to that reaction
 delay. `//trigger ... --immediate` bypasses only the automatic reaction,
 not an explicit `--delay`. After the first command, multi-command batches
 retain their original paste pacing; the reaction is not resampled.
+
+### Declarative state machines (Stage 1 — validation and offline simulation)
+
+Machine definitions are versioned, strict YAML documents. This stage is **read-only**
+in the live client: machines can be validated but **cannot yet be started against
+a live MUD**. The pure interpreter is available to Python tests and tools.
+
+```sh
+aeon-machine validate examples/merchant.machine.yaml
+python -m aeon_mud.machines validate examples/merchant.machine.yaml
+```
+
+Inside an existing aeon-mud session:
+
+```text
+//machine validate examples/merchant.machine.yaml
+```
+
+The example defines an idle → awaiting_price → purchasing/completed or
+leaving/failed merchant flow. State-local transitions reuse the existing
+watch pattern grammar, including `[captures]` and optional `re: true` or
+`search: true`. Guards support a restricted expression subset:
+literals, named values, comparisons, boolean `and/or/not`, and explicit
+`int/float/str` conversions. Python eval, file access, shell actions,
+arbitrary calls, attribute access, and recursive YAML aliases are rejected.
+Actions are limited to `send`, `notify`, and `set`; the Stage 1 engine
+**returns** intended effects and does not perform network I/O.
+
+Timeouts are explicit events at this stage, not timers. Real session timers,
+stateful command dispatch, persistent instance state, Puppet action IDs,
+offline transcript replay, hierarchical states and submachines will follow in
+subsequent PRs under the GitHub state-machine epic.

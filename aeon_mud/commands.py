@@ -14,6 +14,7 @@ from .realm_watches import save_realm_watches
 from .watch_events import DEFAULT_COOLDOWN, parse_sound, lcd_argv
 from .puppet import PuppetServer
 from .triggers import handle_trigger_command
+from .machines import load_machine, MachineError
 
 if TYPE_CHECKING:
     from .session import SessionController
@@ -455,7 +456,7 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line == "//help":
         confirm_local_command(
             transcript, ui,
-            "Local commands: //help, //puppet on|off, //trigger PATTERN --send RESPONSE, //trigger --list, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
+            "Local commands: //help, //machine validate FILE, //puppet on|off, //trigger PATTERN --send RESPONSE, //trigger --list, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
             "[--lcd TEXT] [--cooldown SECONDS] [--search] [--re] [--email] (yellow default), "
             "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE] [--persist|--switch|--stop|--off|--status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."
@@ -463,6 +464,19 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
         return True
     if not line.startswith("//"):
         return False
+    if line == "//machine" or line.startswith("//machine "):
+        try:
+            words = shlex.split(line[len("//machine"):].strip())
+            if len(words) != 2 or words[0] != "validate":
+                raise MachineError("Stage 1 usage: //machine validate FILE")
+            definition = load_machine(words[1])
+            confirm_local_command(
+                transcript, ui,
+                f"Machine valid: {definition.name} ({len(definition.states)} states, initial={definition.initial})",
+            )
+        except (MachineError, OSError, ValueError) as exc:
+            confirm_local_command(transcript, ui, f"Machine validation error: {exc}")
+        return True
     if line == "//trigger" or line.startswith("//trigger "):
         engine = getattr(ui, "triggers", None)
         if engine is None:
