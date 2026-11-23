@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from .puppet_journal import PuppetJournal
 from .reaction import reaction_delay
+from .action_scheduler import ActionScheduler
 
 MAX_REQUEST = 65536
 MAX_COMMANDS = 32
@@ -69,6 +70,7 @@ class PuppetRequest:
     immediate: bool = False
     due: float = 0.0
     reaction_seconds: float = 0.0
+    scheduled_action: object | None = None
     started: bool = False
     cancelled: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -94,7 +96,8 @@ class PuppetServer:
     def __init__(self, character: str) -> None:
         self.path = puppet_socket_path(character)
         self.pending: queue.Queue[PuppetRequest] = queue.Queue(maxsize=32)
-        self.scheduled: deque[PuppetRequest] = deque()
+        self.scheduled: deque[PuppetRequest] = deque()  # compatibility; work is owned by scheduler
+        self.scheduler = ActionScheduler()
         self.stop_event = threading.Event()
         self.listener: socket.socket | None = None
         self.worker: threading.Thread | None = None
@@ -218,53 +221,58 @@ class PuppetServer:
         finally:
             self.connection_slots.release()
 
-    def drain(self, controller: object) -> None:
-        """Schedule without blocking the UI thread; dispatch once the delay elapses."""
+    def prepare(self) -> None:
+        """Transfer received socket requests into the shared bounded queue."""
         while True:
             try:
-                self.scheduled.append(self.pending.get_nowait())
+                request = self.pending.get_nowait()
             except queue.Empty:
                 break
-        now = time.monotonic()
-        ready = [request for request in self.scheduled if request.due <= now]
-        self.scheduled = deque(request for request in self.scheduled if request.due > now)
-        for request in ready:
-            try:
-                if self.stop_event.is_set():
-                    raise RuntimeError("puppet disabled")
-                if not request.begin():
-                    raise RuntimeError("puppet request expired")
-                if controller.current_connection() is None:
-                    raise RuntimeError("MUD session disconnected")
-                if self.journal is not None:
-                    transcript = getattr(controller, "transcript", None)
-                    if transcript is not None:
-                        with transcript.lock:
-                            path = transcript.path if transcript.mode in {"text", "plain"} else None
-                            request.action = self.journal.start_action(
-                                request.commands, durable=path is not None, log_path=path)
-                    else:
-                        request.action = self.journal.start_action(request.commands)
-                for idx, command in enumerate(request.commands):
-                    if idx:
-                        # Preserve existing multiline paste pacing after the initial delay.
-                        time.sleep(controller.profile.paste_line_delay)
-                    if self.stop_event.is_set():
-                        raise RuntimeError("puppet disabled")
-                    if controller.current_connection() is None:
-                        raise RuntimeError("MUD session disconnected")
-                    controller.send_line(command, secret=False, remember=False)
-            except (OSError, RuntimeError, ValueError) as exc:
-                request.error = str(exc)
-            finally:
+            if self.stop_event.is_set() or request.cancelled:
+                request.error = "puppet disabled" if self.stop_event.is_set() else "puppet request expired"
                 request.done.set()
+                continue
+
+            def changed(job, target=request):
+                target.action = job.action
+                if job.done:
+                    target.error = (
+                        "puppet request expired" if job.error == "action expired before dispatch"
+                        else job.error if job.status != "sent" else None)
+                    target.done.set()
+
+            try:
+                request.scheduled_action = self.scheduler.enqueue(
+                    "puppet", request.commands, due=request.due, journal=self.journal,
+                    on_change=changed,
+                    before=lambda r=request: not self.stop_event.is_set() and r.begin())
+                request.scheduled_action.legacy_request = request
+            except (ValueError, RuntimeError) as exc:
+                request.error = str(exc)
+                request.done.set()
+
+    def drain(self, controller: object) -> None:
+        """Legacy adapter; live sessions call the shared scheduler once per tick."""
+        self.prepare()
+        for job in tuple(self.scheduler.jobs.values()):
+            req = getattr(job, "legacy_request", None)
+            if job.origin == "puppet" and req is not None and not req.started:
+                job.due = req.due
+        self.scheduler.drain(controller, origin="puppet", max_steps=MAX_COMMANDS)
+
+    def on_disconnect(self) -> None:
+        self.scheduler.cancel(origin="puppet", reason="session disconnected")
+        while True:
+            try:
+                request = self.pending.get_nowait()
+            except queue.Empty:
+                break
+            request.error = "session disconnected"
+            request.done.set()
 
     def close(self) -> None:
         self.stop_event.set()
-        while self.scheduled:
-            request = self.scheduled.popleft()
-            request.error = "puppet disabled"
-            request.done.set()
+        self.scheduler.cancel(origin="puppet", reason="puppet disabled")
         if self.listener is not None:
             self.listener.close()
         while True:

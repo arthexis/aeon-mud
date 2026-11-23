@@ -17,6 +17,7 @@ import uuid
 
 from .machines import Definition, MachineError, MachineInstance, Decision, load_machine
 from .reaction import reaction_delay
+from .action_scheduler import ActionScheduler
 from .terminal_text import strip_ansi
 
 MAX_DEFINITIONS = 16
@@ -57,6 +58,7 @@ class MachineBridge:
         self.clock = clock or time.monotonic
         self.reaction = reaction or reaction_delay
         self.lock = threading.RLock()
+        self.scheduler = ActionScheduler(clock=self.clock)
         self.definitions: dict[str, Definition] = {}
         self.runs: dict[str, Run] = {}
         self.partial = ""
@@ -189,9 +191,52 @@ class MachineBridge:
         run.receipts.append(receipt)
         run.deadline = None
         if command_list and run.writer or decision.notifications:
-            run.pending = Dispatch(receipt["transition_id"], decision,
-                                   command_list if run.writer else (),
-                                   self.clock() + delay, receipt)
+            pending = Dispatch(receipt["transition_id"], decision,
+                               command_list if run.writer else (),
+                               self.clock() + delay, receipt)
+            run.pending = pending
+            if pending.commands:
+                def changed(job, active=run, item=pending):
+                    with self.lock:
+                        if active.pending is not item:
+                            return
+                        item.index = job.index
+                        item.action_id = job.action["action_id"] if job.action else None
+                        item.receipt["action_id"] = item.action_id
+                        item.receipt["status"] = job.status
+                        if job.error:
+                            item.receipt["error"] = job.error
+                        if job.done:
+                            active.pending = None
+                            if job.status != "sent":
+                                active.machine.status = "recovery_required"
+                                active.last_error = job.error or "machine command delivery unresolved"
+                            else:
+                                self._arm_timeout(active)
+                        elif active.paused and active.step_budget:
+                            active.step_budget -= 1
+
+                try:
+                    self.scheduler.enqueue(
+                        "machine", pending.commands, due=pending.due,
+                        journal=self.journal,
+                        metadata={"machine_id": run.id,
+                                  "machine_name": run.machine.definition.name,
+                                  "transition_id": pending.transition_id,
+                                  "source_cursor": decision.cursor,
+                                  "source_session_id": self.session_id,
+                                  "captures": decision.captures,
+                                  "matched_text": decision.captures.get("0")},
+                        on_change=changed,
+                        can_send=lambda active=run: (
+                            active.pending is pending
+                            and active.machine.status in {"running", "completed"}
+                            and (not active.paused or active.step_budget > 0)))
+                except (ValueError, RuntimeError) as exc:
+                    receipt.update(status="failed", error=str(exc))
+                    run.pending = None
+                    run.machine.status = "recovery_required"
+                    run.last_error = "action scheduler rejected transition"
         else:
             self._arm_timeout(run)
         return receipt
@@ -238,7 +283,11 @@ class MachineBridge:
         with self.lock:
             run = self._get(selector)
             if run.pending is not None:
-                run.pending.receipt["status"] = ("outcome_unknown" if run.pending.index else "cancelled")
+                pending = run.pending
+                self.scheduler.cancel(origin="machine",
+                                      predicate=lambda j: j.metadata.get("machine_id") == run.id,
+                                      reason="machine stopped")
+                pending.receipt["status"] = ("outcome_unknown" if pending.index else "cancelled")
                 run.pending = None
             run.machine.status = "stopped"
             run.paused = False
@@ -289,6 +338,9 @@ class MachineBridge:
                     continue
                 had_pending = run.pending is not None
                 if had_pending:
+                    self.scheduler.cancel(origin="machine",
+                                          predicate=lambda j: j.metadata.get("machine_id") == run.id,
+                                          reason="session disconnected")
                     run.pending.receipt["status"] = (
                         "outcome_unknown" if run.pending.index else "cancelled")
                     run.pending.receipt["error"] = "session disconnected"
@@ -299,13 +351,13 @@ class MachineBridge:
                 run.deadline = None
                 run.paused = False
 
-    def drain(self, controller):
-        """Foreground-only one command or one timeout per call."""
+    def poll_timers(self, controller):
+        """Foreground planning, deadlines and notification-only effects."""
         with self.lock:
             if controller.current_connection() is None or not getattr(controller, "trigger_ready", True):
                 return
             for run in list(self.runs.values()):
-                if run.machine.status == "recovery_required" or run.machine.status == "stopped":
+                if run.machine.status in {"recovery_required", "stopped"}:
                     continue
                 if run.paused and run.step_budget == 0:
                     continue
@@ -320,57 +372,17 @@ class MachineBridge:
                         run.last_error = f"timeout transition rejected: {exc}"
                     return
                 pending = run.pending
-                if pending is None or (pending.due > self.clock() and run.step_budget == 0):
-                    continue
-                if pending.index == 0 and pending.commands and run.writer and pending.action_id is None:
-                    journal = self.journal
-                    if journal is not None:
-                        try:
-                            with controller.transcript.lock:
-                                transcript = controller.transcript
-                                path = transcript.path if transcript.mode in {"text", "plain"} else None
-                                row = journal.start_action(
-                                    list(pending.commands), durable=path is not None, log_path=path,
-                                    origin="machine", machine_id=run.id,
-                                    machine_name=run.machine.definition.name,
-                                    transition_id=pending.transition_id,
-                                    source_cursor=pending.decision.cursor,
-                                    source_session_id=self.session_id,
-                                    captures=pending.decision.captures,
-                                    matched_text=pending.decision.captures.get("0"))
-                            pending.action_id = row["action_id"]
-                            pending.receipt["action_id"] = pending.action_id
-                        except (OSError, ValueError, RuntimeError) as exc:
-                            pending.receipt.update(status="failed", error=f"journal unavailable: {exc}")
-                            run.pending = None
-                            run.machine.status = "recovery_required"
-                            run.last_error = "journal could not reserve dispatch"
-                            return
-                if pending.index < len(pending.commands):
-                    command = pending.commands[pending.index]
-                    # Bypass all local // dispatch; controller sends only a MUD line.
-                    try:
-                        controller.send_line(command, secret=False, remember=False)
-                    except (OSError, RuntimeError, ValueError) as exc:
-                        pending.receipt.update(status="outcome_unknown", error=str(exc))
-                        run.machine.status = "recovery_required"
-                        run.last_error = str(exc)
-                        run.pending = None
-                        return
-                    pending.index += 1
-                    pending.receipt["status"] = (
-                        "sent" if pending.index == len(pending.commands) else "sending")
-                    if pending.index < len(pending.commands):
-                        pending.due = self.clock() + max(0, controller.profile.paste_line_delay)
-                if run.paused and run.step_budget:
-                    run.step_budget -= 1
-                if pending.index == len(pending.commands):
+                if pending is not None and not pending.commands:
                     if pending.decision.notifications:
-                        # Notifications are safe local status messages, never server input.
                         controller.ui.set_status("; ".join(pending.decision.notifications)[:256])
                     run.pending = None
                     self._arm_timeout(run)
-                return
+                    return
+
+    def drain(self, controller):
+        """Compatibility adapter for direct MachineBridge integration tests."""
+        self.poll_timers(controller)
+        self.scheduler.drain(controller, origin="machine")
 
     def execute(self, operation: str, args: list[str]) -> dict:
         """Shared local + Puppet socket command contract (no direct network sends)."""

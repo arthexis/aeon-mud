@@ -748,3 +748,30 @@ validation and observation-only runs do not.
 a client restart loses running state. Durable checkpoints, operator-directed
 recovery, independent shared action scheduling, offline event replay,
 hierarchical states, and submachines remain subsequent stages of issue #53.
+
+
+### Unified action scheduler (Stage 3)
+
+Puppet, `//trigger` and `//machine` now share a **single bounded
+foreground action queue per live MUD session**. Reaction delays are sampled
+once by the action producer, and subsequent commands in the batch respect
+the session's existing paste pacing without blocking the UI thread.
+
+- The scheduler selects the next ready action across all three origins.
+  Delayed actions cannot starve ready actions, and a long multi-command
+  batch yields between commands.
+- Each action is journaled at dispatch with `origin=puppet|trigger|machine`
+  and its source metadata; the same `aeon-puppet --read ACTION_ID` and
+  `--read-last` interfaces observe results from every origin.
+- Puppet's synchronous socket acknowledgment, trigger's persistent
+  one-shot/spent semantics, machine state/trace/step controls, `--immediate`
+  and `--delay` are preserved.
+- Pending batches are cancelled on explicit stop, trigger pause, Puppet
+  disable, or disconnect. A command that may already have been sent is
+  classified `outcome_unknown` and is **never replayed automatically**.
+- Outgoing commands always call the session controller's MUD send path;
+  local `//` commands are never executed from automated trigger/machine
+  templates. There is no new listener, token, service, or network transport.
+
+This consolidates **in-memory** scheduling and receipts, not durable
+machine checkpoint/restart recovery: that work is Stage 4 of issue #53.

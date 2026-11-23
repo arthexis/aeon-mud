@@ -529,6 +529,7 @@ def send_composed_input(
                         if isinstance(transcript, Transcript):
                             puppet.attach(transcript, journal=getattr(getattr(ui, "triggers", None), "journal", None))
                         puppet.machine_bridge = getattr(ui, "machines", None)
+                        puppet.scheduler = getattr(ui, "scheduler", None) or puppet.scheduler
                         puppet.start()
                         controller.puppet = puppet
                     except (OSError, RuntimeError, ValueError) as exc:
