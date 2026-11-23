@@ -14,7 +14,6 @@ from pathlib import Path
 import re
 from typing import Any
 
-import yaml
 
 from .terminal import compile_watch_pattern
 from .terminal_text import strip_ansi
@@ -35,26 +34,35 @@ class MachineError(ValueError):
     """Invalid definition or deterministic-machine input."""
 
 
-class _YamlLoader(yaml.SafeLoader):
-    """Reject aliases and duplicate keys to avoid ambiguous or cyclic models."""
+def _yaml_loader():
+    """Import YAML only when a machine file is loaded (normal client startup is unchanged)."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise MachineError("PyYAML is required for YAML machine definitions; install the package dependencies") from exc
 
-    def compose_node(self, parent, index):
-        if self.check_event(yaml.AliasEvent):
-            raise MachineError("YAML aliases are not supported")
-        return super().compose_node(parent, index)
+    class _YamlLoader(yaml.SafeLoader):
+        """Reject aliases and duplicate keys to avoid ambiguous or cyclic models."""
 
-    def construct_mapping(self, node, deep=False):
-        if not isinstance(node, yaml.MappingNode):
-            raise MachineError("expected a mapping")
-        mapping = {}
-        for key_node, value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if not isinstance(key, str):
-                raise MachineError("YAML mapping keys must be strings")
-            if key in mapping:
-                raise MachineError(f"duplicate YAML key: {key}")
-            mapping[key] = self.construct_object(value_node, deep=deep)
-        return mapping
+        def compose_node(self, parent, index):
+            if self.check_event(yaml.AliasEvent):
+                raise MachineError("YAML aliases are not supported")
+            return super().compose_node(parent, index)
+
+        def construct_mapping(self, node, deep=False):
+            if not isinstance(node, yaml.MappingNode):
+                raise MachineError("expected a mapping")
+            mapping = {}
+            for key_node, value_node in node.value:
+                key = self.construct_object(key_node, deep=deep)
+                if not isinstance(key, str):
+                    raise MachineError("YAML mapping keys must be strings")
+                if key in mapping:
+                    raise MachineError(f"duplicate YAML key: {key}")
+                mapping[key] = self.construct_object(value_node, deep=deep)
+            return mapping
+
+    return yaml, _YamlLoader
 
 
 def _mapping(value: Any, where: str, allowed: set[str]) -> dict:
@@ -347,8 +355,9 @@ def load_machine(path: str | Path) -> Definition:
     data = source.read_bytes()
     if len(data) > MAX_DEFINITION_BYTES:
         raise MachineError("machine definition exceeds 64 KiB")
+    yaml, loader = _yaml_loader()
     try:
-        raw = yaml.load(data.decode("utf-8"), Loader=_YamlLoader)
+        raw = yaml.load(data.decode("utf-8"), Loader=loader)
     except (UnicodeError, yaml.YAMLError) as exc:
         raise MachineError(f"invalid YAML: {exc}") from exc
     return compile_machine(raw)
