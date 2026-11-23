@@ -204,7 +204,7 @@ class MachineBridgeTests(unittest.TestCase):
         self.assertEqual(self.bridge.execute("status", [run["id"]])["id"], run["id"])
         self.assertEqual(self.bridge.execute("list", [])["definitions"], ["merchant"])
         self.assertTrue(self.bridge.execute("trace", [run["id"]])["trace"])
-        with self.assertRaisesRegex(MachineError, "usage"):
+        with self.assertRaisesRegex(MachineError, "supports --observe"):
             self.bridge.execute("start", ["merchant", "--unknown"])
         with self.assertRaisesRegex(MachineError, "usage"):
             self.bridge.execute("secret", [])
