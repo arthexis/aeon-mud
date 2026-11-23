@@ -24,6 +24,7 @@ from .commands import *
 from .transcript import Transcript
 from .triggers import TriggerEngine
 from .puppet_journal import PuppetJournal
+from .action_scheduler import ActionScheduler
 from .machine_bridge import MachineBridge
 
 def prompt_yes_no(
@@ -157,6 +158,7 @@ class SessionController:
         self.puppet = None
         self.triggers = None
         self.machines = None
+        self.scheduler = None
         self.trigger_login_sent = False
         self.trigger_ready = True
         self.tail = ""
@@ -248,6 +250,8 @@ class SessionController:
             self.triggers.on_disconnect()
         if self.machines is not None:
             self.machines.on_disconnect()
+        if self.puppet is not None:
+            self.puppet.on_disconnect()
         if message:
             self.ui.set_status(message)
         return True
@@ -631,6 +635,10 @@ def session_loop(
         ui.triggers = controller.triggers
         controller.machines = MachineBridge()
         ui.machines = controller.machines
+        controller.scheduler = ActionScheduler()
+        ui.scheduler = controller.scheduler
+        controller.triggers.scheduler = controller.scheduler
+        controller.machines.scheduler = controller.scheduler
         journal = PuppetJournal(character) if character is not None else None
         if journal is not None:
             controller.triggers.journal = journal
@@ -665,11 +673,12 @@ def session_loop(
             controller.start_login_worker()
         while not stop.is_set():
             if controller.puppet is not None:
-                controller.puppet.drain(controller)
+                controller.puppet.prepare()
             if controller.triggers is not None:
-                controller.triggers.drain(controller)
+                controller.triggers.prepare()
             if controller.machines is not None:
-                controller.machines.drain(controller)
+                controller.machines.poll_timers(controller)
+            controller.scheduler.drain(controller, max_steps=4)
             controller.maybe_send_keepalive()
             key = reader.read_key(timeout=0.1)
             if key is None:

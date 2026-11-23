@@ -24,6 +24,7 @@ from .realm_watches import realm_key
 from .terminal import compile_watch_pattern
 from .terminal_text import strip_ansi
 from .reaction import reaction_delay
+from .action_scheduler import ActionScheduler
 
 MAX_RULES = 128
 MAX_QUEUE = 64
@@ -128,6 +129,7 @@ class TriggerEngine:
         self.lock = threading.RLock()
         self.rules: list[Trigger] = []
         self.pending: deque[Pending] = deque()
+        self.scheduler = ActionScheduler(clock=self.clock)
         self.partial = ""
         self.paused = False
         self.journal = None
@@ -218,23 +220,24 @@ class TriggerEngine:
     def modify(self, selector: str, operation: str) -> Trigger:
         with self.lock:
             rule = self._find(selector)
-            if operation == "remove":
-                self.rules.remove(rule)
+            if operation == "on":
+                if rule.state == "spent":
+                    raise ValueError("spent triggers require --rearm")
+                rule.state = "armed"
+            elif operation in {"remove", "off", "rearm"}:
                 self.pending = deque(x for x in self.pending if x.rule_id != rule.id)
-            else:
-                before = rule.state
-                if operation == "off":
+                self.scheduler.cancel(
+                    origin="trigger",
+                    predicate=lambda j: j.metadata.get("trigger_id") == rule.id,
+                    reason="trigger " + operation)
+                if operation == "remove":
+                    self.rules.remove(rule)
+                elif operation == "off":
                     rule.state = "disabled"
-                    self.pending = deque(x for x in self.pending if x.rule_id != rule.id)
-                elif operation == "on":
-                    if rule.state == "spent":
-                        raise ValueError("spent triggers require --rearm")
-                    rule.state = "armed"
-                elif operation == "rearm":
-                    rule.state, rule.receipt = "armed", None
-                    self.pending = deque(x for x in self.pending if x.rule_id != rule.id)
                 else:
-                    raise ValueError("invalid trigger action")
+                    rule.state, rule.receipt = "armed", None
+            else:
+                raise ValueError("invalid trigger action")
             if rule.persist:
                 self._save()
             return rule
@@ -244,20 +247,18 @@ class TriggerEngine:
             self.paused = value
             if value:
                 for pending in self.pending:
-                    pending.receipt.update(
-                        status="outcome_unknown" if pending.index else "failed",
-                        error="trigger dispatch paused")
+                    pending.receipt.update(status="failed", error="trigger dispatch paused")
                 self.pending.clear()
+                self.scheduler.cancel(origin="trigger", reason="trigger dispatch paused")
             self._save()
 
     def on_disconnect(self):
         with self.lock:
             self.partial = ""
             for pending in self.pending:
-                pending.receipt.update(
-                    status="outcome_unknown" if pending.index else "failed",
-                    error="session disconnected")
+                pending.receipt.update(status="failed", error="session disconnected")
             self.pending.clear()
+            self.scheduler.cancel(origin="trigger", reason="session disconnected")
             try:
                 if any(rule.persist for rule in self.rules):
                     self._save()
@@ -267,6 +268,7 @@ class TriggerEngine:
     def clear(self):
         with self.lock:
             n = len(self.rules)
+            self.scheduler.cancel(origin="trigger", reason="triggers cleared")
             self.rules = []
             self.pending.clear()
             self._save()
@@ -359,54 +361,46 @@ class TriggerEngine:
         with self.lock:
             self.partial = ""
 
-    def drain(self, controller):
-        """Foreground thread; at most one command dispatched per call."""
+    def prepare(self):
+        """Move reserved one-shot responses to the common foreground scheduler."""
         with self.lock:
-            if self.paused or not self.pending:
-                return
-            # Never dispatch queued commands during the character login handshake.
-            if not getattr(controller, "trigger_ready", True):
-                return
-            # An unrelated delayed trigger must not stall ready actions.
-            pending = next((item for item in self.pending if item.due <= self.clock()), None)
-            if pending is None:
-                return
-            if controller.current_connection() is None:
-                pending.receipt.update(status="failed", error="session disconnected")
-                self.pending.remove(pending)
-                self._persist_receipt(pending.rule_id)
-                return
-            if pending.index == 0 and self.journal is not None:
-                transcript = controller.transcript
-                with transcript.lock:
-                    path = transcript.path if transcript.mode in {"text", "plain"} else None
+            while self.pending:
+                pending = self.pending.popleft()
+                try:
                     rule = self._find(pending.rule_id)
-                    try:
-                        action = self.journal.start_action(
-                            pending.commands, durable=path is not None, log_path=path,
-                            origin="trigger", trigger_id=rule.id, trigger_name=rule.name,
-                            captures=pending.receipt["captures"],
-                            matched_text=pending.receipt["matched_text"])
-                    except (OSError, ValueError, RuntimeError) as exc:
-                        pending.receipt.update(status="failed", error=f"action journal: {exc}")
-                        self.pending.remove(pending)
-                        self._persist_receipt(pending.rule_id)
-                        return
-                pending.receipt["action_id"] = action["action_id"]
-            command = pending.commands[pending.index]
-            try:
-                controller.send_line(command, secret=False, remember=False)
-            except (OSError, RuntimeError, ValueError) as exc:
-                pending.receipt.update(status="outcome_unknown", error=str(exc))
-                self.pending.remove(pending)
-            else:
-                pending.index += 1
-                pending.receipt["status"] = "sent" if pending.index == len(pending.commands) else "sending"
-                if pending.index == len(pending.commands):
-                    self.pending.remove(pending)
-                else:
-                    pending.due = self.clock() + controller.profile.paste_line_delay
-            self._persist_receipt(pending.rule_id)
+                except ValueError:
+                    continue
+
+                def changed(job, p=pending, r=rule):
+                    with self.lock:
+                        p.index = job.index
+                        if job.action is not None:
+                            p.receipt["action_id"] = job.action["action_id"]
+                        status = "failed" if job.status == "cancelled" else job.status
+                        p.receipt["status"] = status
+                        if job.error:
+                            p.receipt["error"] = job.error
+                        if r.persist:
+                            self._persist_receipt(r.id)
+
+                try:
+                    self.scheduler.enqueue(
+                        "trigger", pending.commands, due=pending.due,
+                        journal=self.journal,
+                        metadata={"trigger_id": rule.id, "trigger_name": rule.name,
+                                  "captures": pending.receipt["captures"],
+                                  "matched_text": pending.receipt["matched_text"]},
+                        on_change=changed, can_send=lambda: not self.paused)
+                except (ValueError, RuntimeError) as exc:
+                    pending.receipt.update(status="failed", error=str(exc))
+                    if rule.persist:
+                        self._persist_receipt(rule.id)
+
+    def drain(self, controller):
+        """Compatibility adapter for standalone trigger engine tests."""
+        self.prepare()
+        if not self.paused:
+            self.scheduler.drain(controller, origin="trigger")
 
     def _persist_receipt(self, rule_id: str):
         rule = self._find(rule_id)
