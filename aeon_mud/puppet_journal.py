@@ -106,7 +106,7 @@ class PuppetJournal:
             self.changed.notify_all()
             return row
 
-    def start_action(self, commands: list[str], *, durable: bool = False, log_path=None, origin="puppet", trigger_id=None, trigger_name=None, captures=None, matched_text=None):
+    def start_action(self, commands: list[str], *, durable: bool = False, log_path=None, origin="puppet", trigger_id=None, trigger_name=None, captures=None, matched_text=None, machine_id=None, machine_name=None, transition_id=None, source_cursor=None, source_session_id=None):
         with self.changed:
             self.sequence += 1
             action = uuid.uuid4().hex
@@ -114,6 +114,9 @@ class PuppetJournal:
                    "ts": datetime.now(timezone.utc).isoformat(), "action_id": action,
                    "commands": commands, "origin": origin, "trigger_id": trigger_id, "trigger_name": trigger_name,
                    "captures": captures, "matched_text": matched_text,
+                   "machine_id": machine_id, "machine_name": machine_name,
+                   "transition_id": transition_id, "source_cursor": source_cursor,
+                   "source_session_id": source_session_id,
                    "log_path": str(log_path.absolute()) if log_path else None,
                    "log_offset": log_path.stat().st_size if log_path is not None and log_path.exists() else None}
             self.actions[action] = row

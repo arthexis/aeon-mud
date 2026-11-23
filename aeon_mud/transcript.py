@@ -79,15 +79,18 @@ class Transcript:
         # Never create a plaintext Puppet sidecar for encrypted transcripts.
         if self.mode == "encrypted":
             log_path, log_offset = None, None
+        recorded = None
         for observer in tuple(self.observers):
-            observer(direction, text, secret=secret, log_path=log_path,
-                     log_offset=log_offset)
+            result = observer(direction, text, secret=secret, log_path=log_path,
+                              log_offset=log_offset)
+            if isinstance(result, dict) and result.get("kind") == "event":
+                recorded = result
+        return recorded
 
-    def write(self, direction: str, text: str, secret: bool = False) -> None:
+    def write(self, direction: str, text: str, secret: bool = False) -> dict | None:
         with self.lock:
             if self.mode == "off" or not self.path:
-                self._notify(direction, text, secret, None)
-                return
+                return self._notify(direction, text, secret, None)
             path = self.path
             if self.mode == "text":
                 clean_text = "[redacted]" if secret else strip_ansi(text)
@@ -98,8 +101,7 @@ class Transcript:
                     else:
                         handle.write(clean_text)
                     offset = handle.tell()
-                self._notify(direction, text, secret, path, offset)
-                return
+                return self._notify(direction, text, secret, path, offset)
             payload = {
                 "ts": utc_now(),
                 "direction": direction,
@@ -115,7 +117,7 @@ class Transcript:
                 else:
                     handle.write(raw + b"\n")
                 offset = handle.tell()
-            self._notify(direction, text, secret, path, offset)
+            return self._notify(direction, text, secret, path, offset)
 
 
 def decrypt_transcript(source: Path, destination: Path | None) -> None:

@@ -24,6 +24,7 @@ from .commands import *
 from .transcript import Transcript
 from .triggers import TriggerEngine
 from .puppet_journal import PuppetJournal
+from .machine_bridge import MachineBridge
 
 def prompt_yes_no(
     message: str,
@@ -155,6 +156,7 @@ class SessionController:
         self.character_login: tuple[str, str] | None = None
         self.puppet = None
         self.triggers = None
+        self.machines = None
         self.trigger_login_sent = False
         self.trigger_ready = True
         self.tail = ""
@@ -244,6 +246,8 @@ class SessionController:
         self.ui.set_connected(False)
         if self.triggers is not None:
             self.triggers.on_disconnect()
+        if self.machines is not None:
+            self.machines.on_disconnect()
         if message:
             self.ui.set_status(message)
         return True
@@ -251,6 +255,8 @@ class SessionController:
     def close(self) -> None:
         if self.triggers is not None:
             self.triggers.on_disconnect()
+        if self.machines is not None:
+            self.machines.on_disconnect()
         if self.puppet is not None:
             self.puppet.detach(self.transcript)
             self.puppet.close()
@@ -529,13 +535,16 @@ def receiver_loop(
             controller.mark_server_output()
             assert decoder is not None
             text = decoder.feed(output)
-            transcript.write("recv", text)
+            recorded = transcript.write("recv", text)
             controller.ui.append_output(text)
             controller.observe_output(text)
             if controller.character_login is not None and controller.trigger_login_sent:
                 controller.trigger_ready = True
             if controller.triggers is not None and controller.trigger_ready:
                 controller.triggers.feed(text)
+            if controller.machines is not None and controller.trigger_ready:
+                controller.machines.feed(
+                    text, cursor=recorded.get("seq") if recorded is not None else None)
     if not stop.is_set():
         stop.set()
     controller.ui.set_connected(False)
@@ -620,10 +629,13 @@ def session_loop(
             controller.trigger_ready = False
         controller.triggers = TriggerEngine(profile, character)
         ui.triggers = controller.triggers
-        if character is not None:
-            journal = PuppetJournal(character)
+        controller.machines = MachineBridge()
+        ui.machines = controller.machines
+        journal = PuppetJournal(character) if character is not None else None
+        if journal is not None:
             controller.triggers.journal = journal
             transcript.observers.append(journal.record)
+        controller.machines.attach(journal=journal, character=character)
         stop = threading.Event()
         receiver = threading.Thread(
             target=receiver_loop,
@@ -640,11 +652,14 @@ def session_loop(
         ui.start()
         if initial_banner:
             controller.mark_server_output()
-            transcript.write("recv", initial_banner)
+            recorded = transcript.write("recv", initial_banner)
             ui.append_output(initial_banner)
             controller.observe_output(initial_banner)
             if controller.triggers is not None and controller.trigger_ready:
                 controller.triggers.feed(initial_banner)
+            if controller.machines is not None and controller.trigger_ready:
+                controller.machines.feed(
+                    initial_banner, cursor=recorded.get("seq") if recorded is not None else None)
         receiver.start()
         if character is not None:
             controller.start_login_worker()
@@ -653,6 +668,8 @@ def session_loop(
                 controller.puppet.drain(controller)
             if controller.triggers is not None:
                 controller.triggers.drain(controller)
+            if controller.machines is not None:
+                controller.machines.drain(controller)
             controller.maybe_send_keepalive()
             key = reader.read_key(timeout=0.1)
             if key is None:

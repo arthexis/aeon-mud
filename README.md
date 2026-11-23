@@ -689,3 +689,62 @@ Timeouts are explicit events at this stage, not timers. Real session timers,
 stateful command dispatch, persistent instance state, Puppet action IDs,
 offline transcript replay, hierarchical states and submachines will follow in
 subsequent PRs under the GitHub state-machine epic.
+
+
+### Live machine bridge (Stage 2 — in-memory execution)
+
+After validating a definition, the client can load and start it explicitly
+against a character session. The receiver only recognizes **complete incoming
+server lines**; it never feeds local `[client]` confirmations, sent commands,
+or terminal-rendering artifacts into the state machine.
+
+```text
+//machine validate examples/merchant.machine.yaml
+//machine load examples/merchant.machine.yaml
+//machine list
+//machine start merchant
+//machine start merchant --observe
+//machine start merchant --immediate
+//machine status
+//machine status sm-INSTANCE
+//machine inspect sm-INSTANCE
+//machine trace sm-INSTANCE
+//machine pause sm-INSTANCE
+//machine step sm-INSTANCE
+//machine resume sm-INSTANCE
+//machine stop sm-INSTANCE
+```
+
+With `//puppet on` enabled in `aeon-mud connect PROFILE --login Hero`,
+the owner-only local socket also accepts machine operations:
+
+```sh
+aeon-machine Hero load examples/merchant.machine.yaml
+aeon-machine Hero start merchant --immediate
+aeon-machine Hero status
+aeon-machine Hero trace sm-INSTANCE
+aeon-puppet Hero --read-last
+```
+
+One machine per character may send commands; additional instances can observe
+with `--observe`, producing decisions/receipts without outbound actions.
+Machine transitions use the same [sigil], regex, and `--search` syntax as
+watches/triggers, but only transitions in the current state are active.
+Each transition includes its source journal cursor and a bounded receipt;
+actual sends create `origin=machine` Puppet actions with the instance ID,
+transition ID, captures, and source sequence. Existing randomized reactions
+and paste pacing remain in effect. State timeout clocks begin only after
+the pending action batch finishes.
+
+Only the **foreground session loop** sends machine commands. A paused machine
+does not dispatch; `step` allows one pending send while paused. Disconnects
+and ambiguous sends terminate automatic progress with `recovery_required`;
+neither a reconnect nor `resume` silently replays effects. `stop` cancels
+remaining scheduled sends but cannot undo commands already transmitted.
+Machines require explicit `start`. Write-capable machines require `--login`;
+validation and observation-only runs do not.
+
+**Current boundary:** definitions and machine instances are in memory only;
+a client restart loses running state. Durable checkpoints, operator-directed
+recovery, independent shared action scheduling, offline event replay,
+hierarchical states, and submachines remain subsequent stages of issue #53.

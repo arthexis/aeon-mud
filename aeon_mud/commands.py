@@ -14,7 +14,7 @@ from .realm_watches import save_realm_watches
 from .watch_events import DEFAULT_COOLDOWN, parse_sound, lcd_argv
 from .puppet import PuppetServer
 from .triggers import handle_trigger_command
-from .machines import load_machine, MachineError
+from .machine_bridge import handle_machine_command
 
 if TYPE_CHECKING:
     from .session import SessionController
@@ -456,7 +456,7 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line == "//help":
         confirm_local_command(
             transcript, ui,
-            "Local commands: //help, //machine validate FILE, //puppet on|off, //trigger PATTERN --send RESPONSE, //trigger --list, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
+            "Local commands: //help, //machine validate/load/list/start/status/pause/resume/stop/inspect/trace/step, //puppet on|off, //trigger PATTERN --send RESPONSE, //trigger --list, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
             "[--lcd TEXT] [--cooldown SECONDS] [--search] [--re] [--email] (yellow default), "
             "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE] [--persist|--switch|--stop|--off|--status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."
@@ -465,17 +465,9 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if not line.startswith("//"):
         return False
     if line == "//machine" or line.startswith("//machine "):
-        try:
-            words = shlex.split(line[len("//machine"):].strip())
-            if len(words) != 2 or words[0] != "validate":
-                raise MachineError("Stage 1 usage: //machine validate FILE")
-            definition = load_machine(words[1])
-            confirm_local_command(
-                transcript, ui,
-                f"Machine valid: {definition.name} ({len(definition.states)} states, initial={definition.initial})",
-            )
-        except (MachineError, OSError, ValueError) as exc:
-            confirm_local_command(transcript, ui, f"Machine validation error: {exc}")
+        confirm_local_command(
+            transcript, ui,
+            handle_machine_command(line, getattr(ui, "machines", None)) or "Machine error")
         return True
     if line == "//trigger" or line.startswith("//trigger "):
         engine = getattr(ui, "triggers", None)
@@ -536,6 +528,7 @@ def send_composed_input(
                         puppet = PuppetServer(controller.character_login[0])
                         if isinstance(transcript, Transcript):
                             puppet.attach(transcript, journal=getattr(getattr(ui, "triggers", None), "journal", None))
+                        puppet.machine_bridge = getattr(ui, "machines", None)
                         puppet.start()
                         controller.puppet = puppet
                     except (OSError, RuntimeError, ValueError) as exc:
