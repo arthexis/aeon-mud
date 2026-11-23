@@ -145,6 +145,7 @@ class MachineBridge:
             for receipt in reversed(run.receipts):
                 row = {**receipt,
                        "commands": [cmd[:512] for cmd in receipt.get("commands", [])[:8]],
+                       "notifications": [msg[:512] for msg in receipt.get("notifications", [])[:8]],
                        "variables": {key: str(value)[:128]
                                      for key, value in list(receipt.get("variables", {}).items())[:24]},
                        "captures": {key: str(value)[:128]
