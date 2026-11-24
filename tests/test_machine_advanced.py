@@ -36,7 +36,9 @@ class InterpreterAdvancedTests(unittest.TestCase):
         self.assertEqual(returned.stack_depth, 0)
         self.assertEqual(m.variables["price"], "75")
         self.assertNotIn("1", m.variables)
-        self.assertNotIn("0", m.variables)
+        # Original root-level match captures keep the Stage 1 behavior;
+        # submachine captures never overwrite that root capture.
+        self.assertEqual(m.variables["0"], "Welcome to my shop")
         self.assertEqual(m.frames, [])
         buy = m.receive_line("Confirm purchase", cursor=12)
         self.assertEqual(buy.to_state, "purchasing")
