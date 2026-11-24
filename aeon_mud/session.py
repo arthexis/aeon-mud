@@ -653,7 +653,13 @@ def session_loop(
         if journal is not None:
             controller.triggers.journal = journal
             transcript.observers.append(journal.record)
-        controller.machines.attach(journal=journal, character=character, profile=profile)
+        try:
+            controller.machines.attach(journal=journal, character=character, profile=profile)
+        except (OSError, ValueError) as exc:
+            # A damaged machine ledger must never enable memory-only fallback,
+            # but manual MUD gameplay and the Puppet/watch tools remain usable.
+            controller.machines.persistence_fault = str(exc)
+            ui.set_status(f"Machine automation disabled: {exc}")
         stop = threading.Event()
         receiver = threading.Thread(
             target=receiver_loop,
