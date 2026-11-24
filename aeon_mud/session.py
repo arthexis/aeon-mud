@@ -271,6 +271,8 @@ class SessionController:
             # normal first-banner timeout after the session has been closed.
             self.ready_for_commands.set()
         self.mark_disconnected(None, "")
+        if self.machines is not None:
+            self.machines.close()
 
     def send_raw(self, data: bytes, expected_transport: Transport | None = None) -> None:
         failed_transport: Transport | None = None
@@ -643,7 +645,7 @@ def session_loop(
         if journal is not None:
             controller.triggers.journal = journal
             transcript.observers.append(journal.record)
-        controller.machines.attach(journal=journal, character=character)
+        controller.machines.attach(journal=journal, character=character, profile=profile)
         stop = threading.Event()
         receiver = threading.Thread(
             target=receiver_loop,
@@ -651,6 +653,8 @@ def session_loop(
             daemon=True,
         )
     except BaseException:
+        if "controller" in locals() and controller.machines is not None:
+            controller.machines.close()
         transport.close()
         raise
     reader: KeyReader | None = None

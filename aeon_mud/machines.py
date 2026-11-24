@@ -478,12 +478,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     parser = argparse.ArgumentParser(
         prog="aeon-machine",
-        description="Control in-memory MUD machines over the owner-only Puppet socket. "
+        description="Control MUD machines and durable recovery over the owner-only Puppet socket. "
                     "Use 'aeon-machine validate FILE' for offline validation.")
     parser.add_argument("character", help="Active character with //puppet on")
     parser.add_argument("operation", choices=[
         "load", "list", "start", "status", "pause", "resume",
-        "stop", "inspect", "trace", "step",
+        "stop", "inspect", "trace", "step", "recover",
     ])
     parser.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)

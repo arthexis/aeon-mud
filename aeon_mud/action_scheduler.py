@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import threading
+import hashlib
 import time
 import uuid
 from typing import Callable, Any
@@ -27,6 +28,7 @@ class ScheduledAction:
     on_change: Callable[..., None] | None = None
     can_send: Callable[[], bool] | None = None
     before: Callable[[], bool] | None = None
+    before_send: Callable[..., bool] | None = None
     key: str = field(default_factory=lambda: uuid.uuid4().hex)
     index: int = 0
     action: dict | None = None
@@ -54,7 +56,7 @@ class ActionScheduler:
 
     def enqueue(self, origin: str, commands: list[str] | tuple[str, ...], *,
                 due: float | None = None, journal=None, metadata=None,
-                on_change=None, can_send=None, before=None) -> ScheduledAction:
+                on_change=None, can_send=None, before=None, before_send=None) -> ScheduledAction:
         if origin not in {"puppet", "trigger", "machine"}:
             raise ValueError("unsupported action origin")
         if not isinstance(commands, (list, tuple)) or not 1 <= len(commands) <= MAX_COMMANDS:
@@ -72,7 +74,7 @@ class ActionScheduler:
                                   due=self.clock() if due is None else due,
                                   journal=journal, metadata=dict(metadata or {}),
                                   on_change=on_change, can_send=can_send,
-                                  before=before, order=self.order)
+                                  before=before, before_send=before_send, order=self.order)
             self.jobs[job.key] = job
             return job
 
@@ -111,14 +113,19 @@ class ActionScheduler:
         if job.journal is None:
             return
         transcript = getattr(controller, "transcript", None)
+        # Machine state captures can contain game secrets. The Puppet index
+        # retains command digests and masked captures, not plaintext bodies.
+        commands = (["sha256:" + hashlib.sha256(cmd.encode("utf-8")).hexdigest()
+                     for cmd in job.commands] if job.origin == "machine"
+                    else list(job.commands))
         if transcript is None:
             job.action = job.journal.start_action(
-                list(job.commands), origin=job.origin, **job.metadata)
+                commands, origin=job.origin, **job.metadata)
             return
         with transcript.lock:
             path = transcript.path if transcript.mode in {"text", "plain"} else None
             job.action = job.journal.start_action(
-                list(job.commands), origin=job.origin, durable=path is not None,
+                commands, origin=job.origin, durable=path is not None,
                 log_path=path, **job.metadata)
 
     def _pick(self, origin=None, excluded=None):
@@ -169,6 +176,10 @@ class ActionScheduler:
                     raise RuntimeError(job.cancel_reason)
                 if controller.current_connection() is None:
                     raise RuntimeError("session disconnected")
+                # Machine checkpoint/ledger hooks must return successfully
+                # before each externally visible MUD send (including batch N).
+                if job.before_send is not None and not job.before_send(job):
+                    raise ValueError("action pre-send checkpoint denied dispatch")
                 attempted = True
                 controller.send_line(job.commands[job.index], secret=False, remember=False)
                 job.index += 1
