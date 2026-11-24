@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 
-from .machines import Definition, State, MachineError, MachineInstance, Decision, load_machine
+from .machines import Definition, State, MachineError, MachineInstance, Decision, load_machine, MAX_CALL_DEPTH, MAX_VARIABLES
 from .reaction import reaction_delay
 from .action_scheduler import ActionScheduler
 from .terminal_text import strip_ansi
@@ -124,6 +124,8 @@ class MachineBridge:
                 "writer": run.writer, "paused": run.paused,
                 "last_error": run.last_error,
                 "variables": public_value(run.machine.variables),
+                "frames": public_value(run.machine.frames),
+                "retry_counts": dict(run.machine.retry_counts),
                 "pending": public_value(recovery) if recovery is not None else None,
                 "receipts": [sanitized_receipt(receipt) for receipt in list(run.receipts)[-8:]],
                 "definition_valid": run.definition_valid,
@@ -202,10 +204,35 @@ class MachineBridge:
             machine.variables = dict(raw.get("variables", {}))
             # Whole matched server lines are never restored as future templates.
             machine.variables.pop("0", None)
+            frames = raw.get("frames", [])
+            counters = raw.get("retry_counts", {})
+            if (not isinstance(frames, list) or len(frames) > MAX_CALL_DEPTH or
+                not isinstance(counters, dict) or len(counters) > MAX_VARIABLES):
+                raise MachineError("invalid persisted machine call stack or retry counters")
+            for frame in frames:
+                if (not isinstance(frame, dict) or
+                    not isinstance(frame.get("locals"), dict) or
+                    not isinstance(frame.get("exports"), dict) or
+                    not isinstance(frame.get("name"), str) or
+                    not isinstance(frame.get("return_to"), str) or
+                    len(frame["locals"]) > MAX_VARIABLES or
+                    (definition.initial != "unavailable" and
+                     (frame["return_to"] not in definition.states or
+                      frame["name"] not in definition.submachines))):
+                    raise MachineError("invalid persisted submachine frame")
+            for key, val in counters.items():
+                if key not in definition.states or type(val) is not int or not 0 <= val <= 3:
+                    raise MachineError("invalid persisted timeout retry counter")
+            for frame in frames:
+                frame["locals"].pop("0", None)
+            machine.frames = frames
+            machine.retry_counts = counters
             status = raw.get("status")
             has_pending = raw.get("pending") is not None
             active = status not in ("stopped", "completed") or has_pending
-            valid = machine.state in definition.states and definition.initial != "unavailable"
+            valid = (machine.state in definition.states and
+                     definition.initial != "unavailable" and
+                     all(frame["return_to"] in definition.states for frame in machine.frames))
             machine.status = ("stopped" if status == "stopped" and not has_pending else
                               "recovery_required" if active or not valid else status)
             run = Run(raw["id"], machine, bool(raw.get("writer")))
@@ -231,14 +258,14 @@ class MachineBridge:
 
     @staticmethod
     def _has_send(definition: Definition) -> bool:
+        batches = []
         for state in definition.states.values():
-            batches = [state.on_enter]
+            batches.append(state.on_enter)
             batches.extend(transition.actions for transition in state.transitions)
             if state.on_timeout is not None:
                 batches.append(state.on_timeout.actions)
-            if any(action.kind == "send" for batch in batches for action in batch):
-                return True
-        return False
+        batches.extend(transition.actions for transition in definition.global_transitions)
+        return any(action.kind == "send" for batch in batches for action in batch)
 
     def _writer_taken(self) -> bool:
         return any(run.writer and (run.machine.status not in ("completed", "stopped") or run.pending is not None)
@@ -279,7 +306,10 @@ class MachineBridge:
                 "pending": run.pending is not None, "deadline": run.deadline,
                 "last_error": run.last_error,
                 "recovery_action": (run.recovery_action.get("transition_id")
-                                    if run.recovery_action else None)}
+                                    if run.recovery_action else None),
+                "stack_depth": len(run.machine.frames),
+                "active_submachine": (run.machine.frames[-1]["name"] if run.machine.frames else None),
+                "retry_attempts": run.machine.retry_counts.get(run.machine.state, 0)}
 
     @staticmethod
     def _status(run: Run) -> str:
@@ -304,8 +334,82 @@ class MachineBridge:
         with self.lock:
             run = self._get(selector)
             return {**self._summary(run),
-                    "variables": dict(run.machine.variables),
-                    "receipt": dict(run.receipts[-1]) if run.receipts else None}
+                    "variables": public_value(run.machine.variables),
+                    "frames": public_value(run.machine.frames),
+                    "retry_counts": dict(run.machine.retry_counts),
+                    "receipt": sanitized_receipt(run.receipts[-1]) if run.receipts else None}
+
+    def diagnose(self, selector: str | None = None) -> dict:
+        """Read-only bounded diagnostics for observers and operators."""
+        with self.lock:
+            if selector is None:
+                return {"instances": [self._summary(run) for run in self.runs.values()],
+                        "writer_owned": self._writer_taken(),
+                        "persistence_error": self.persistence_fault}
+            run = self._get(selector)
+            state = run.machine.definition.states.get(run.machine.state)
+            source = state
+            hierarchy = []
+            while source is not None:
+                hierarchy.append(source.name)
+                source = (run.machine.definition.states.get(source.parent)
+                          if source.parent is not None else None)
+            effective = run.machine.timeout_state()
+            attempts = run.machine.retry_counts.get(run.machine.state, 0)
+            return {**self._summary(run), "hierarchy": hierarchy,
+                    "active_transition_counts": [len(run.machine.definition.states[n].transitions)
+                                                 for n in hierarchy],
+                    "global_transitions": len(run.machine.definition.global_transitions),
+                    "call_stack": public_value(run.machine.frames),
+                    "retry_remaining": max(0, (effective.retry_limit - attempts)
+                                           if effective is not None else 0),
+                    "timeout_seconds": effective.timeout if effective is not None else None,
+                    "last_receipt": (sanitized_receipt(run.receipts[-1]) if run.receipts else None)}
+
+    def intervene(self, selector: str, variable: str, value: str) -> dict:
+        """Operator changes only an existing variable on a paused instance."""
+        with self.lock:
+            run = self._get(selector)
+            if run.machine.status != "running" or not run.paused or run.pending is not None:
+                raise MachineError("variable intervention requires paused instance without pending sends")
+            if (not isinstance(variable, str) or not variable.isidentifier() or
+                len(variable) > 64 or not isinstance(value, str) or len(value) > 256 or
+                "\r" in value or "\n" in value):
+                raise MachineError("invalid bounded variable override")
+            local = run.machine.frames[-1]["locals"] if run.machine.frames else {}
+            if variable in local:
+                local[variable] = value
+            elif variable in run.machine.variables:
+                run.machine.variables[variable] = value
+            else:
+                raise MachineError("operator may change declared/existing variables only")
+            run.receipts.append({"event": "operator_set", "status": "no_send",
+                                 "variable": variable, "commands": [],
+                                 "transition_id": "mt-" + uuid.uuid4().hex[:16]})
+            self._persist("operator_variable_override")
+            return self._summary(run)
+
+    def signal(self, selector: str, event: str) -> dict:
+        """Explicit death event; disconnect/stop stay owned by session lifecycle."""
+        with self.lock:
+            if event != "death":
+                raise MachineError("operator may signal death only; disconnect/stop are lifecycle events")
+            run = self._get(selector)
+            if (run.machine.status != "running" or run.pending is not None or
+                run.paused is False):
+                raise MachineError("signal requires paused running instance without pending sends")
+            decision = run.machine.signal(event)
+            if decision is None:
+                raise MachineError("machine has no handler for death")
+            if decision.commands:
+                raise MachineError("system event must not send commands")
+            run.receipts.append({"event": "death", "status": "no_send",
+                                 "from_state": decision.from_state,
+                                 "to_state": decision.to_state, "commands": [],
+                                 "notifications": list(decision.notifications),
+                                 "transition_id": "mt-" + uuid.uuid4().hex[:16]})
+            self._persist("operator_signal_death")
+            return self._summary(run)
 
     def trace(self, selector: str | None = None) -> dict:
         with self.lock:
@@ -314,13 +418,7 @@ class MachineBridge:
             selected = []
             size = 0
             for receipt in reversed(run.receipts):
-                row = {**receipt,
-                       "commands": [cmd[:512] for cmd in receipt.get("commands", [])[:8]],
-                       "notifications": [msg[:512] for msg in receipt.get("notifications", [])[:8]],
-                       "variables": {key: str(value)[:128]
-                                     for key, value in list(receipt.get("variables", {}).items())[:24]},
-                       "captures": {key: str(value)[:128]
-                                    for key, value in list(receipt.get("captures", {}).items())[:24]}}
+                row = sanitized_receipt(receipt)
                 n = len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
                 if selected and size + n > 24000:
                     break
@@ -335,8 +433,10 @@ class MachineBridge:
         if run.machine.status != "running" or run.paused or run.pending is not None:
             run.deadline = None
             return
-        state = run.machine.definition.states[run.machine.state]
-        run.deadline = self.clock() + state.timeout if state.timeout is not None else None
+        state = run.machine.timeout_state()
+        run.deadline = (self.clock() + state.timeout +
+                        state.retry_backoff * run.machine.retry_counts.get(run.machine.state, 0)
+                        if state is not None else None)
 
     def _plan(self, run: Run, decision: Decision, *, immediate: bool = False):
         if run.pending is not None:
@@ -354,6 +454,9 @@ class MachineBridge:
                    "captures": dict(decision.captures), "variables": dict(decision.variables),
                    "commands": list(command_list), "notifications": list(decision.notifications),
                    "reaction_delay_ms": round(delay * 1000), "action_id": None,
+                   "transition_source": decision.transition_source,
+                   "stack_depth": decision.stack_depth,
+                   "retry_attempt": decision.retry_attempt,
                    "status": "reserved" if command_list and run.writer else (
                        "observed" if command_list else "no_send")}
         run.receipts.append(receipt)
@@ -501,6 +604,15 @@ class MachineBridge:
                                       reason="machine stopped")
                 pending.receipt["status"] = ("outcome_unknown" if pending.index else "cancelled")
                 run.pending = None
+            if run.machine.status == "running":
+                decision = run.machine.signal("stop")
+                if decision is not None:
+                    run.receipts.append({"status": "no_send", "event": "stop",
+                                         "transition_id": "mt-" + uuid.uuid4().hex[:16],
+                                         "from_state": decision.from_state,
+                                         "to_state": decision.to_state,
+                                         "source_cursor": None,
+                                         "commands": [], "notifications": []})
             run.machine.status = "stopped"
             run.paused = False
             run.step_budget = 0
@@ -562,7 +674,17 @@ class MachineBridge:
                         "outcome_unknown" if pending.index else "cancelled")
                     pending.receipt["error"] = "session disconnected"
                     run.pending = None
-                if run.machine.status == "running" or had_pending:
+                was_running = run.machine.status == "running"
+                if was_running and not had_pending:
+                    decision = run.machine.signal("disconnect")
+                    if decision is not None:
+                        run.receipts.append({"status": "no_send", "event": "disconnect",
+                                             "transition_id": "mt-" + uuid.uuid4().hex[:16],
+                                             "from_state": decision.from_state,
+                                             "to_state": decision.to_state,
+                                             "source_cursor": None,
+                                             "commands": [], "notifications": []})
+                if was_running or had_pending:
                     run.machine.status = "recovery_required"
                     run.last_error = "disconnected; no automatic replay or resume"
                 run.deadline = None
@@ -625,7 +747,8 @@ class MachineBridge:
             if not run.definition_valid:
                 raise MachineError("definition missing or changed; only abort is safe")
             if any(REDACTED in str(x) or "[truncated]" in str(x)
-                   for x in run.machine.variables.values()):
+                   for x in (*run.machine.variables.values(),
+                             *(frame["locals"] for frame in run.machine.frames))):
                 raise MachineError("restored variables were redacted/truncated; abort and restart explicitly")
             if mode == "skip":
                 # This is an acknowledgement that the operator reconciled the
@@ -676,6 +799,12 @@ class MachineBridge:
         """Shared local + Puppet socket command contract (no direct network sends)."""
         if len(args) > 40 or any(not isinstance(a, str) or len(a) > 4096 for a in args):
             raise MachineError("invalid machine operation arguments")
+        if operation == "diagnose" and len(args) <= 1:
+            return self.diagnose(*args)
+        if operation == "set" and len(args) == 3:
+            return self.intervene(*args)
+        if operation == "signal" and len(args) == 2:
+            return self.signal(*args)
         if operation == "recover" and len(args) >= 2:
             selector, mode, *opts = args
             if mode in ("abort", "skip") and not opts:
@@ -714,7 +843,7 @@ class MachineBridge:
             return getattr(self, operation)(*args)
         if operation in {"pause", "resume", "stop", "step"} and len(args) == 1:
             return getattr(self, operation)(args[0])
-        raise MachineError("usage: //machine load FILE | list | start NAME [--observe] [--immediate] | status [ID] | inspect [ID] | trace [ID] | pause/resume/step/stop ID | recover ID skip|abort|retry --send CMD [--accept-duplicate-risk]")
+        raise MachineError("usage: //machine load FILE | list | start NAME [--observe] [--immediate] | status [ID] | inspect [ID] | trace [ID] | pause/resume/step/stop ID | diagnose [ID] | set ID VARIABLE VALUE | signal ID death | recover ID skip|abort|retry --send CMD [--accept-duplicate-risk]")
 
 
 def handle_machine_command(line: str, bridge: MachineBridge | None) -> str | None:

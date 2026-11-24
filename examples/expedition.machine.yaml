@@ -1,0 +1,85 @@
+# Stage 6 reference: explicit call/return, scoped variables, inherited guards.
+name: expedition
+version: 1
+scope: character
+initial: idle
+variables:
+  item: sword
+  max_price: 100
+  price: "0"
+states:
+  idle:
+    transitions:
+      - match: "Welcome to my shop"
+        call: quote
+        return_to: reviewing
+        with:
+          item: "{item}"
+        export:
+          price: price
+  common:
+    transitions:
+      - match: "A guard warns [warning]"
+        goto: leaving
+  reviewing:
+    parent: common
+    transitions:
+      - match: "Confirm purchase"
+        when: "int(price) <= max_price"
+        goto: purchasing
+        actions:
+          - send: "buy {item}"
+      - match: "Confirm purchase"
+        goto: leaving
+      - match: "Request a new quote"
+        call: quote
+        return_to: reviewing
+        with:
+          item: "{item}"
+        export:
+          price: price
+  purchasing:
+    transitions:
+      - match: "You purchase [item]"
+        goto: completed
+  leaving:
+    final: true
+  completed:
+    final: true
+  dead:
+    final: true
+  offline:
+    final: true
+  stopped:
+    final: true
+global_transitions:
+  - match: "You are dead"
+    goto: dead
+events:
+  death:
+    goto: dead
+  disconnect:
+    goto: offline
+  stop:
+    goto: stopped
+submachines:
+  quote:
+    initial: waiting
+    variables:
+      item: ""
+      price: "0"
+    states:
+      waiting:
+        timeout: 2s
+        retry:
+          max: 2
+          backoff: 1s
+        on_timeout:
+          goto: failed
+        transitions:
+          - match: "The [item] costs [price] coins"
+            goto: done
+      done:
+        final: true
+      failed:
+        final: true
