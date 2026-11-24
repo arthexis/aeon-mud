@@ -288,5 +288,52 @@ class DurableMachineTests(unittest.TestCase):
             self.bridge.execute("recover", [run["id"], "abort"])
 
 
+    def test_failed_checkpoint_mirror_uses_verified_ledger_after_restart(self):
+        run = self.bridge.start("merchant")
+        original = os.replace
+        def mirror_fault(source, target):
+            if str(target) == str(self.bridge.store.path):
+                raise OSError("simulated power loss before mirror replace")
+            return original(source, target)
+        with mock.patch("aeon_mud.machine_persistence.os.replace", side_effect=mirror_fault):
+            with self.assertRaisesRegex(MachineError, "checkpoint"):
+                self.bridge.pause(run["id"])
+        self.assertEqual(self.bridge.status(run["id"])["status"], "recovery_required")
+        self.restarted()
+        self.assertEqual(self.bridge.status(run["id"])["status"], "recovery_required")
+        self.bridge.drain(self.controller)
+        self.assertEqual(self.controller.sent, [])
+
+    def test_failed_resume_checkpoint_disables_pending_machine_commands(self):
+        run = self.bridge.start("merchant")
+        self.bridge.pause(run["id"])
+        original = self.bridge.store.commit
+        def fail(snapshot, *, reason):
+            if reason == "resumed":
+                raise OSError("read-only volume")
+            return original(snapshot, reason=reason)
+        with mock.patch.object(self.bridge.store, "commit", side_effect=fail):
+            with self.assertRaisesRegex(MachineError, "checkpoint"):
+                self.bridge.resume(run["id"])
+        self.assertEqual(self.bridge.status(run["id"])["status"], "recovery_required")
+        self.time[0] += 10
+        self.bridge.drain(self.controller)
+        self.assertEqual(self.controller.sent, [])
+        self.assertEqual(len(self.bridge.scheduler.jobs), 0)
+
+    def test_aborted_missing_definition_remains_stopped_across_restarts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            copy = Path(temp) / "merchant.yaml"
+            copy.write_bytes(FIXTURE.read_bytes())
+            self.bridge.load(str(copy))
+            run = self.bridge.start("merchant")
+            copy.unlink()
+            self.restarted()
+            self.assertEqual(self.bridge.status(run["id"])["status"], "recovery_required")
+            self.bridge.recover(run["id"], "abort")
+            self.restarted()
+            self.assertEqual(self.bridge.status(run["id"])["status"], "stopped")
+
+
 if __name__ == "__main__":
     unittest.main()
