@@ -775,3 +775,68 @@ the session's existing paste pacing without blocking the UI thread.
 
 This consolidates **in-memory** scheduling and receipts, not durable
 machine checkpoint/restart recovery: that work is Stage 4 of issue #53.
+
+
+### Durable machine checkpoints and explicit recovery (Stage 4)
+
+A live `--login CHARACTER` session opens a **per-realm/per-character**,
+owner-only machine store in `~/.aeon-mud/client/machine-runs/`.
+The machine ledger (`.jsonl`) is append-only, checksummed, fsynced before
+machine dispatch, and bounded to 16 MiB. The companion `.json` checkpoint
+is atomically replaced and can be reconstructed from the valid ledger.
+An OS file lock prevents two client processes from advancing the same scope.
+
+Each state transition is recorded **before** entering the shared action
+scheduler; the foreground scheduler records another durable
+`dispatch_attempt` checkpoint before **every** MUD command, followed by
+`dispatch_result`. A crash between those two records cannot establish
+whether a command reached the MUD: it is reported as uncertain, never
+automatically retried. A torn final ledger append is repaired using its last
+verified prefix; corruption in a complete entry causes a fail-closed error.
+
+After restart, previously running instances appear as
+`recovery_required`. Restarting the client or reconnecting **does not**
+reissue commands or resume machine timers. Inspect the journal, log and MUD
+state before selecting one of the explicit operator resolutions:
+
+```text
+//machine status
+//machine inspect sm-INSTANCE
+//machine trace sm-INSTANCE
+//machine recover sm-INSTANCE skip
+//machine recover sm-INSTANCE abort
+//machine recover sm-INSTANCE retry --send "list"
+//machine recover sm-INSTANCE retry --accept-duplicate-risk --send "list"
+```
+
+Use `skip` only after confirming externally that the effect was already
+performed (or intentionally discarded): it resumes the current state without
+replaying the old batch. `abort` stops the instance permanently. A
+`retry` requires specifying **every original command** verbatim; its SHA-256
+digest must match the reserved batch. If delivery may have occurred, explicit
+`--accept-duplicate-risk` is mandatory. A missing/changed YAML definition,
+or redacted/truncated state needed for safe resumption, prevents resume/retry:
+restore the original definition for inspection or abort the instance.
+
+The same operations are available through the existing owner-only socket:
+
+```sh
+aeon-machine Hero status
+aeon-machine Hero inspect sm-INSTANCE
+aeon-machine Hero recover sm-INSTANCE skip
+aeon-machine Hero recover sm-INSTANCE retry --accept-duplicate-risk --send "list"
+```
+
+Machine checkpoints omit plaintext command bodies, retain command hashes,
+mask secret-named variables/captures, and do not retain whole matched server
+lines. Machine-origin Puppet actions carry digests instead of raw commands;
+source event cursors and action IDs remain available. Existing **plaintext
+MUD transcripts** deliberately continue to record sent/received gameplay
+text, and may contain game-provided sensitive content; use encrypted/off
+logging if that is unacceptable.
+
+**Boundaries:** the durable store protects machine instances and their
+recovery decisions, not the game server's state. It does not imply
+exactly-once execution at the MUD. The store stops dispatching when
+permissions/integrity/disk limits prevent safe commits. Offline replay,
+hierarchical machines and submachines remain future stages of issue #53.

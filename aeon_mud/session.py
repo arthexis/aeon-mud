@@ -249,7 +249,10 @@ class SessionController:
         if self.triggers is not None:
             self.triggers.on_disconnect()
         if self.machines is not None:
-            self.machines.on_disconnect()
+            try:
+                self.machines.on_disconnect()
+            except (OSError, ValueError) as exc:
+                self.ui.set_status(f"Machine persistence disabled: {exc}")
         if self.puppet is not None:
             self.puppet.on_disconnect()
         if message:
@@ -257,20 +260,27 @@ class SessionController:
         return True
 
     def close(self) -> None:
-        if self.triggers is not None:
-            self.triggers.on_disconnect()
-        if self.machines is not None:
-            self.machines.on_disconnect()
-        if self.puppet is not None:
-            self.puppet.detach(self.transcript)
-            self.puppet.close()
-            self.puppet = None
-        with self.lock:
-            self._closed = True
-            # Release pending login workers rather than waiting out their
-            # normal first-banner timeout after the session has been closed.
-            self.ready_for_commands.set()
-        self.mark_disconnected(None, "")
+        try:
+            if self.triggers is not None:
+                self.triggers.on_disconnect()
+            if self.machines is not None:
+                try:
+                    self.machines.on_disconnect()
+                except (OSError, ValueError) as exc:
+                    self.ui.set_status(f"Machine persistence disabled: {exc}")
+            if self.puppet is not None:
+                self.puppet.detach(self.transcript)
+                self.puppet.close()
+                self.puppet = None
+            with self.lock:
+                self._closed = True
+                # Release pending login workers rather than waiting out their
+                # normal first-banner timeout after the session has been closed.
+                self.ready_for_commands.set()
+            self.mark_disconnected(None, "")
+        finally:
+            if self.machines is not None:
+                self.machines.close()
 
     def send_raw(self, data: bytes, expected_transport: Transport | None = None) -> None:
         failed_transport: Transport | None = None
@@ -643,7 +653,13 @@ def session_loop(
         if journal is not None:
             controller.triggers.journal = journal
             transcript.observers.append(journal.record)
-        controller.machines.attach(journal=journal, character=character)
+        try:
+            controller.machines.attach(journal=journal, character=character, profile=profile)
+        except (OSError, ValueError) as exc:
+            # A damaged machine ledger must never enable memory-only fallback,
+            # but manual MUD gameplay and the Puppet/watch tools remain usable.
+            controller.machines.persistence_fault = str(exc)
+            ui.set_status(f"Machine automation disabled: {exc}")
         stop = threading.Event()
         receiver = threading.Thread(
             target=receiver_loop,
@@ -651,6 +667,8 @@ def session_loop(
             daemon=True,
         )
     except BaseException:
+        if "controller" in locals() and controller.machines is not None:
+            controller.machines.close()
         transport.close()
         raise
     reader: KeyReader | None = None
