@@ -202,7 +202,8 @@ class MachineBridge:
             has_pending = raw.get("pending") is not None
             active = status not in ("stopped", "completed") or has_pending
             valid = machine.state in definition.states and definition.initial != "unavailable"
-            machine.status = "recovery_required" if active or not valid else status
+            machine.status = ("stopped" if status == "stopped" and not has_pending else
+                              "recovery_required" if active or not valid else status)
             run = Run(raw["id"], machine, bool(raw.get("writer")))
             run.definition_valid = valid
             run.recovery_action = raw.get("pending")
@@ -649,7 +650,8 @@ class MachineBridge:
             transition = prior.get("transition_id")
             run.pending = None
             run.recovery_action = None
-            run.machine.status = "running"
+            run.machine.status = ("completed" if run.machine.definition.states[run.machine.state].final
+                                  else "running")
             run.last_error = None
             run.paused = False
             decision = Decision(run.machine.state, run.machine.state, "operator_retry",
