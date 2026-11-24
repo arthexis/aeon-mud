@@ -87,9 +87,13 @@ class MachineBridge:
                     if snapshot is not None:
                         self._restore(snapshot)
                         self._persist("restart_recovery")
-                except BaseException:
+                except BaseException as exc:
                     store.close()
                     self.store = None
+                    self.definitions.clear()
+                    self.definition_paths.clear()
+                    self.runs.clear()
+                    self.persistence_fault = str(exc)
                     raise
 
     def close(self):
@@ -128,10 +132,10 @@ class MachineBridge:
                 "definitions": self.definition_paths.copy(), "runs": entries}
 
     def _persist(self, reason: str):
-        if self.store is None:
-            return
         if self.persistence_fault is not None:
             raise MachineError(f"machine persistence unavailable: {self.persistence_fault}")
+        if self.store is None:
+            return
         if not self.runs and not self.definition_paths:
             return
         try:
@@ -241,6 +245,8 @@ class MachineBridge:
                    for run in self.runs.values())
 
     def load(self, path: str) -> dict:
+        if self.persistence_fault is not None:
+            raise MachineError(f"machine automation disabled: {self.persistence_fault}")
         definition = load_machine(Path(path))
         with self.lock:
             if definition.name not in self.definitions and len(self.definitions) >= MAX_DEFINITIONS:
@@ -260,8 +266,11 @@ class MachineBridge:
 
     def list(self) -> dict:
         with self.lock:
-            return {"definitions": sorted(self.definitions),
-                    "instances": [self._summary(r) for r in self.runs.values()]}
+            result = {"definitions": sorted(self.definitions),
+                      "instances": [self._summary(r) for r in self.runs.values()]}
+            if self.persistence_fault:
+                result["persistence_error"] = self.persistence_fault
+            return result
 
     def _summary(self, run: Run) -> dict:
         return {"id": run.id, "machine": run.machine.definition.name,
@@ -442,6 +451,8 @@ class MachineBridge:
 
     def start(self, name: str, *, observe: bool = False, immediate: bool = False) -> dict:
         with self.lock:
+            if self.persistence_fault is not None:
+                raise MachineError(f"machine automation disabled: {self.persistence_fault}")
             if name not in self.definitions:
                 raise MachineError(f"machine not loaded: {name}")
             if len(self.runs) >= MAX_INSTANCES:
