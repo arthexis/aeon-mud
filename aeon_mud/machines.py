@@ -467,7 +467,8 @@ def main(argv: list[str] | None = None) -> int:
     """Validate locally or access an enabled character's owner-only Puppet socket."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments and arguments[0] in {"replay", "diagram"}:
-        from .machine_replay import replay, mermaid
+        from importlib import import_module
+        replay_module = import_module(".machine_replay", __package__)
         operation = arguments[0]
         parser = argparse.ArgumentParser(prog="aeon-machine " + operation)
         parser.add_argument("operation", choices=[operation])
@@ -483,10 +484,10 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args(arguments)
         try:
             definition = load_machine(args.definition)
-            report = (replay(definition, args.events, format=args.format)
+            report = (replay_module.replay(definition, args.events, format=args.format)
                       if args.events is not None else None)
             if operation == "diagram" or args.diagram:
-                print(mermaid(definition, report), end="")
+                print(replay_module.mermaid(definition, report), end="")
             else:
                 print(json.dumps(report, ensure_ascii=False, sort_keys=True))
             return 0
