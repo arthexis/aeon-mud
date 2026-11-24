@@ -70,6 +70,7 @@ class MachineBridge:
         self.session_id: str | None = None
         self.character: str | None = None
         self.store: MachineStore | None = None
+        self.persistence_fault: str | None = None
         self.definition_paths: dict[str, dict[str, str]] = {}
 
     def attach(self, *, journal=None, character=None, profile=None, store_root=None):
@@ -129,9 +130,24 @@ class MachineBridge:
     def _persist(self, reason: str):
         if self.store is None:
             return
+        if self.persistence_fault is not None:
+            raise MachineError(f"machine persistence unavailable: {self.persistence_fault}")
+        if not self.runs and not self.definition_paths:
+            return
         try:
             self.store.commit(self._snapshot(), reason=reason)
         except (OSError, DurableMachineError, ValueError) as exc:
+            # Fail closed for EVERY pending machine dispatch, including jobs
+            # from a failed resume/pause/timeout checkpoint. Do not permit a
+            # subsequent foreground tick to act on non-durable state.
+            self.persistence_fault = str(exc)
+            for run in self.runs.values():
+                if run.machine.status not in ("stopped", "completed") or run.pending is not None:
+                    run.machine.status = "recovery_required"
+                    run.last_error = "machine durable store unavailable"
+                    run.deadline = None
+            self.scheduler.cancel(origin="machine",
+                                  reason="machine durable store unavailable")
             raise MachineError(f"durable machine checkpoint failed: {exc}") from exc
 
     def _restore(self, snapshot: dict):
