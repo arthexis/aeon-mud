@@ -243,28 +243,44 @@ class MachineStore:
             self._directory()
             self._guard_file(self.path, limit=MAX_SNAPSHOT)
             self._guard_file(self.ledger, limit=MAX_LEDGER)
-            # Re-open the entire ledger, including checking for a torn tail.
-            # Truncating to a verified newline boundary is safe only when the
-            # prefix has already been validated by load().
+            # Inspect only the tail; a full 16 MiB scan on every command
+            # would be particularly expensive on SD cards. A previous load()
+            # already verified the complete checksum chain under this lock.
             if self.ledger.exists():
                 with self.ledger.open("rb") as reader:
-                    contents = reader.read(MAX_LEDGER + 1)
-                if len(contents) > MAX_LEDGER:
-                    raise DurableMachineError("machine ledger exceeds size limit")
-                if contents and not contents.endswith(b"\n"):
-                    valid_prefix = contents.rsplit(b"\n", 1)[0]
-                    valid_bytes = len(valid_prefix) + (1 if valid_prefix else 0)
-                    if self.sequence != contents[:valid_bytes].count(b"\n"):
-                        raise DurableMachineError("machine ledger tail has unverified prefix")
-                    flags = os.O_WRONLY
-                    if hasattr(os, "O_NOFOLLOW"):
-                        flags |= os.O_NOFOLLOW
-                    fd = os.open(self.ledger, flags)
-                    try:
-                        os.ftruncate(fd, valid_bytes)
-                        os.fsync(fd)
-                    finally:
-                        os.close(fd)
+                    reader.seek(0, os.SEEK_END)
+                    length = reader.tell()
+                    if length > MAX_LEDGER:
+                        raise DurableMachineError("machine ledger exceeds size limit")
+                    if length:
+                        reader.seek(-1, os.SEEK_END)
+                        if reader.read(1) != b"\\n":
+                            start = max(0, length - MAX_ENTRY - 1)
+                            reader.seek(start)
+                            trailing = reader.read()
+                            pos = trailing.rfind(b"\\n")
+                            good_end = start + pos + 1 if pos >= 0 else 0
+                            if (good_end == 0) != (self.sequence == 0):
+                                raise DurableMachineError("machine ledger has an unverified tail")
+                            if good_end:
+                                reader.seek(max(0, good_end - MAX_ENTRY - 1))
+                                verified_tail = reader.read(good_end - reader.tell())
+                                final = verified_tail.rstrip(b"\\n").split(b"\\n")[-1]
+                                try:
+                                    prior = json.loads(final)
+                                    if prior["seq"] != self.sequence or prior["checksum"] != self.last_checksum:
+                                        raise DurableMachineError("machine ledger tail mismatch")
+                                except (KeyError, ValueError, TypeError) as exc:
+                                    raise DurableMachineError("machine ledger tail cannot be verified") from exc
+                            flags = os.O_WRONLY
+                            if hasattr(os, "O_NOFOLLOW"):
+                                flags |= os.O_NOFOLLOW
+                            fd = os.open(self.ledger, flags)
+                            try:
+                                os.ftruncate(fd, good_end)
+                                os.fsync(fd)
+                            finally:
+                                os.close(fd)
             seq = self.sequence + 1
             row = {"version": VERSION, "scope_hash": self.scope_hash,
                    "seq": seq, "reason": reason,
