@@ -374,6 +374,7 @@ class Decision:
     commands: tuple[str, ...]
     notifications: tuple[str, ...]
     cursor: int | None
+    transition_index: int | None = None
 
 
 class MachineInstance:
@@ -388,7 +389,8 @@ class MachineInstance:
         self.partial = ""
 
     def _commit(self, destination: str, actions: tuple[Action, ...], captures: dict[str, Any],
-                *, event: str, cursor: int | None) -> Decision:
+                *, event: str, cursor: int | None,
+                transition_index: int | None = None) -> Decision:
         next_state = self.definition.states[destination]
         staged = {**self.variables, **captures}
         commands: list[str] = []
@@ -404,7 +406,7 @@ class MachineInstance:
         if len(commands) > MAX_ACTIONS:
             raise MachineError("too many commands in one transition")
         decision = Decision(self.state, destination, event, dict(captures), dict(staged),
-                            tuple(commands), tuple(notifications), cursor)
+                            tuple(commands), tuple(notifications), cursor, transition_index)
         self.state = destination
         self.variables = staged
         self.status = "completed" if next_state.final else "running"
@@ -423,7 +425,7 @@ class MachineInstance:
             return None
         clean = strip_ansi(line)[:MAX_LINE]
         current = self.definition.states[self.state]
-        for transition in current.transitions:
+        for index, transition in enumerate(current.transitions):
             match = transition.regex.search(clean) if transition.search else transition.regex.match(clean)
             if match is None:
                 continue
@@ -435,7 +437,7 @@ class MachineInstance:
             if not evaluate_condition(transition.when, context):
                 continue
             return self._commit(transition.goto, transition.actions, captures,
-                                event="recv", cursor=cursor)
+                                event="recv", cursor=cursor, transition_index=index)
         return None
 
     def timeout(self, *, cursor: int | None = None) -> Decision | None:
@@ -464,6 +466,34 @@ class MachineInstance:
 def main(argv: list[str] | None = None) -> int:
     """Validate locally or access an enabled character's owner-only Puppet socket."""
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] in {"replay", "diagram"}:
+        from importlib import import_module
+        replay_module = import_module(".machine_replay", __package__)
+        operation = arguments[0]
+        parser = argparse.ArgumentParser(prog="aeon-machine " + operation)
+        parser.add_argument("operation", choices=[operation])
+        parser.add_argument("definition", help="Validated machine YAML definition")
+        if operation == "replay":
+            parser.add_argument("events", help="Existing JSONL event journal or explicit text log")
+        else:
+            parser.add_argument("events", nargs="?", help="Optional replay events for highlighting")
+        parser.add_argument("--format", choices=["auto", "jsonl", "text"], default="auto")
+        if operation == "replay":
+            parser.add_argument("--diagram", action="store_true",
+                                help="Output Mermaid instead of JSON trace")
+        args = parser.parse_args(arguments)
+        try:
+            definition = load_machine(args.definition)
+            report = (replay_module.replay(definition, args.events, format=args.format)
+                      if args.events is not None else None)
+            if operation == "diagram" or args.diagram:
+                print(replay_module.mermaid(definition, report), end="")
+            else:
+                print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+            return 0
+        except (OSError, MachineError, ValueError) as exc:
+            print(f"aeon-machine: {exc}", file=sys.stderr)
+            return 1
     if arguments and arguments[0] == "validate":
         parser = argparse.ArgumentParser(prog="aeon-machine validate")
         parser.add_argument("operation", choices=["validate"])

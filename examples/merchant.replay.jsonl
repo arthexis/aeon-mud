@@ -1,0 +1,6 @@
+{"kind":"event","seq":1,"session_id":"fixture-session","ts":"2026-11-24T00:00:00+00:00","direction":"recv","text":"[client] Welcome to my shop\n"}
+{"kind":"event","seq":2,"session_id":"fixture-session","ts":"2026-11-24T00:00:01+00:00","direction":"recv","text":"Welcome to my "}
+{"kind":"action","seq":3,"session_id":"fixture-session","ts":"2026-11-24T00:00:01+00:00","origin":"puppet","action_id":"test-puppet","commands":["unrelated"]}
+{"kind":"event","seq":4,"session_id":"fixture-session","ts":"2026-11-24T00:00:02+00:00","direction":"recv","text":"shop\nThe sword costs 75 "}
+{"kind":"event","seq":5,"session_id":"fixture-session","ts":"2026-11-24T00:00:03+00:00","direction":"send","text":"value sword"}
+{"kind":"event","seq":6,"session_id":"fixture-session","ts":"2026-11-24T00:00:04+00:00","direction":"recv","text":"coins\nYou purchase sword\n"}

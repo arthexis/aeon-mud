@@ -725,6 +725,9 @@ def handle_machine_command(line: str, bridge: MachineBridge | None) -> str | Non
         if len(words) == 2 and words[0] == "validate":
             definition = load_machine(words[1])
             return f"Machine valid: {definition.name} ({len(definition.states)} states, initial={definition.initial})"
+        if words and words[0] == "replay":
+            from .machine_replay import local_replay
+            return local_replay(words[1:], bridge=bridge)
         if bridge is None:
             raise MachineError("machine bridge unavailable")
         if not words:

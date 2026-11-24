@@ -840,3 +840,63 @@ recovery decisions, not the game server's state. It does not imply
 exactly-once execution at the MUD. The store stops dispatching when
 permissions/integrity/disk limits prevent safe commits. Offline replay,
 hierarchical machines and submachines remain future stages of issue #53.
+
+
+### Offline state-machine replay and Mermaid (Stage 5)
+
+Reconstruct machine decisions from **recorded** Puppet journal or plain JSONL
+transcript events. A replay is completely offline: no live session, Puppet
+socket, shared action scheduler, MUD command, checkpoint update, or new machine
+instance is involved. Its reported command hashes represent **proposed**
+effects, not proof that the historical client sent them.
+
+```sh
+aeon-machine replay examples/merchant.machine.yaml examples/merchant.replay.jsonl
+aeon-machine replay examples/merchant.machine.yaml examples/merchant.replay.jsonl --diagram
+aeon-machine diagram examples/merchant.machine.yaml
+aeon-machine diagram examples/merchant.machine.yaml examples/merchant.replay.jsonl
+```
+
+Inside the client, `//machine replay MACHINE.yaml EVENTS.jsonl` returns a
+bounded read-only summary. If exactly one definition is already loaded, use
+the shorter `//machine replay EVENTS.jsonl`. Append `--diagram` to
+print Mermaid source showing reached states and visited transitions.
+
+Replays use the **existing machine compiler and interpreter**: the same
+`[sigils]`, regex captures, guards, ordered transitions and on-enter
+actions. The output includes a deterministic state/transition trace and
+original `session_id` and `seq` cursors from the JSONL source.
+The default JSON output masks secret-named variables, suppresses whole
+matched lines, and hashes proposed command bodies. Offline replay never
+uses current live machine state or performs MUD writes.
+
+Source formats and accuracy:
+
+- **Structured JSONL**: `kind=event` + `direction=recv` and `text`, or
+  plain JSONL transcript `direction/text`. Outgoing actions and local
+  `[client]` confirmations are skipped; a fragmented logical line
+  remains fragmented until its terminating newline arrives. Invalid,
+  out-of-order or oversized records fail closed.
+- **Explicit timeout records**: `{"kind":"timeout","seq":N,"session_id":"...", "event":"timeout"}`
+  allow deterministic testing of timeout transitions. Wall-clock gaps in
+  historical logs **do not invent timeouts**: actual command dispatch,
+  pacing, and timeout-start moments are not reliably reconstructible from
+  raw received text alone.
+- **Plain text logs**: accept only when explicitly requested with
+  `--format text`, and the result is marked `approximate: true` because
+  textual `> ` prefixes and client messages can be indistinguishable
+  from actual server text. Prefer structured journals for acceptance.
+- **Session boundaries**: never join fragments across sessions and never
+  advance a running machine into a subsequent session without operator
+  recovery. Encrypted DPAPI files require explicit offline decryption
+  outside the replay engine.
+
+A sample recorded fixture is included at
+`examples/merchant.replay.jsonl`. The default input cap is 8 MiB and
+50,000 records, with up to 1,024 transitions. The Mermaid output uses
+machine state identifiers rather than inserting untrusted match-pattern
+text, highlights visited edges by count, and highlights the final state.
+
+**Stage 5 is for deterministic analysis, not live acceptance.**
+Hierarchical states, reusable submachines, and final live/deploy acceptance
+are tracked separately in issue #53.
