@@ -166,6 +166,9 @@ def _public_decision(decision: Decision, session_id: str, source_line: int) -> d
         "session_id": session_id,
         "source_line": source_line,
         "transition_index": decision.transition_index,
+        "transition_source": decision.transition_source,
+        "stack_depth": decision.stack_depth,
+        "retry_attempt": decision.retry_attempt,
         "captures": decision.captures,
         "variables": decision.variables,
         "commands": list(decision.commands),
@@ -191,7 +194,8 @@ def replay(definition: Definition, source: str | Path, *, format: str = "auto") 
         row = _public_decision(decision, sid, line)
         trace.append(row)
         if decision.from_state is not None:
-            visited[(decision.from_state, decision.transition_index,
+            visited[(decision.transition_source or decision.from_state,
+                     decision.transition_index,
                      decision.event, decision.to_state)] += 1
 
     collect(instance.start(), "replay", 0)
@@ -238,7 +242,7 @@ def replay(definition: Definition, source: str | Path, *, format: str = "auto") 
 
 
 def mermaid(definition: Definition, report: dict | None = None) -> str:
-    """Portable stateDiagram-v2; never insert raw user-supplied patterns into DSL."""
+    """State diagram with hierarchy, calls/returns, global edges and replay counts."""
     counts = Counter()
     visited_states = set()
     current = None
@@ -247,24 +251,42 @@ def mermaid(definition: Definition, report: dict | None = None) -> str:
         for row in report.get("trace", []):
             prev, next_state = row.get("from_state"), row.get("to_state")
             if prev is not None:
-                counts[(prev, row.get("transition_index"),
+                counts[(row.get("transition_source") or prev, row.get("transition_index"),
                         row.get("event"), next_state)] += 1
             if isinstance(next_state, str):
                 visited_states.add(next_state)
     lines = ["stateDiagram-v2", f"    [*] --> {definition.initial}"]
+    def visited(source, index, kind, dest):
+        count = counts[(source, index, kind, dest)]
+        return f" (visited {count}x)" if count else ""
+
     for name, state in definition.states.items():
+        if state.parent is not None:
+            # Use safe compiler-validated identifiers, not untrusted match text.
+            lines.append(f'    state "{name} (inherits {state.parent})" as {name}')
         for number, transition in enumerate(state.transitions):
-            key = (name, number, "recv", transition.goto)
-            count = counts[key]
-            suffix = f" (visited {count}x)" if count else ""
-            lines.append(f"    {name} --> {transition.goto}: match {number + 1}{suffix}")
+            target = (definition.submachines[transition.call].initial if transition.call
+                      else transition.goto)
+            label = "call " + transition.call if transition.call else f"match {number + 1}"
+            lines.append(f"    {name} --> {target}: {label}{visited(name, number, 'recv', target)}")
+            if transition.call is not None:
+                for child_name, child in definition.states.items():
+                    if (child.final and
+                        child_name.startswith(transition.call + "__")):
+                        lines.append(f"    {child_name} --> {transition.return_to}: return")
         if state.on_timeout is not None:
-            key = (name, None, "timeout", state.on_timeout.goto)
-            count = counts[key]
-            suffix = f" (visited {count}x)" if count else ""
-            lines.append(f"    {name} --> {state.on_timeout.goto}: timeout{suffix}")
-        if state.final:
+            target = state.on_timeout.goto
+            if state.retry_limit:
+                lines.append(f"    {name} --> {name}: retry max {state.retry_limit}")
+            lines.append(f"    {name} --> {target}: timeout{visited(name, None, 'timeout', target)}")
+        if state.final and "__" not in name:
             lines.append(f"    {name} --> [*]")
+    for index, transition in enumerate(definition.global_transitions):
+        lines.append(f"    global_guard --> {transition.goto}: global {index + 1}")
+    if definition.global_transitions:
+        lines.append('    state "GLOBAL" as global_guard')
+    for event, transition in definition.events.items():
+        lines.append(f"    global_guard --> {transition.goto}: {event}")
     if visited_states:
         lines += [
             "    classDef replayVisited fill:#dbeafe,stroke:#2563eb,stroke-width:2px",

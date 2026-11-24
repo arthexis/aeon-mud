@@ -456,7 +456,7 @@ def handle_local_command(line: str, transcript: Transcript, ui: MudUi) -> bool:
     if line == "//help":
         confirm_local_command(
             transcript, ui,
-            "Local commands: //help, //machine validate/replay/load/list/start/status/pause/resume/stop/inspect/trace/step/recover, //puppet on|off, //trigger PATTERN --send RESPONSE, //trigger --list, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
+            "Local commands: //help, //machine validate/replay/load/list/start/status/diagnose/pause/resume/stop/inspect/trace/step/recover/set/signal, //puppet on|off, //trigger PATTERN --send RESPONSE, //trigger --list, //watch PATTERN [--color COLOR] [--sound [MOTIF.]SOUND] " 
             "[--lcd TEXT] [--cooldown SECONDS] [--search] [--re] [--email] (yellow default), "
             "//watch list, //unwatch [PATTERN], //watch clear, //log [FILE] [--persist|--switch|--stop|--off|--status], "
             "//save FILE, //load [FILE]. Watches persist per host:port."

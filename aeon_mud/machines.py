@@ -6,6 +6,7 @@ for a future, separately accepted foreground scheduler to dispatch.
 from __future__ import annotations
 
 import argparse
+import copy
 import ast
 from dataclasses import dataclass, field
 import json
@@ -21,7 +22,11 @@ from .terminal_text import strip_ansi
 from .triggers import PLACEHOLDER, duration
 
 MAX_DEFINITION_BYTES = 64 * 1024
-MAX_STATES = 32
+MAX_STATES = 64
+MAX_SUBMACHINES = 8
+MAX_CALL_DEPTH = 4
+MAX_GLOBAL_TRANSITIONS = 16
+MAX_RETRIES = 3
 MAX_TRANSITIONS = 32
 MAX_ACTIONS = 16
 MAX_VARIABLES = 64
@@ -220,6 +225,10 @@ class Transition:
     when: ast.Expression | None = None
     actions: tuple[Action, ...] = ()
     regex: re.Pattern[str] | None = field(default=None, repr=False)
+    call: str | None = None
+    return_to: str | None = None
+    inputs: dict[str, str] = field(default_factory=dict)
+    exports: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -230,6 +239,17 @@ class State:
     transitions: tuple[Transition, ...] = ()
     timeout: float | None = None
     on_timeout: Transition | None = None
+    parent: str | None = None
+    retry_limit: int = 0
+    retry_backoff: float = 0.0
+    retry_allow_send: bool = False
+
+
+@dataclass(frozen=True)
+class Submachine:
+    name: str
+    initial: str
+    variables: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -240,6 +260,9 @@ class Definition:
     states: dict[str, State]
     scope: str = "character"
     version: int = 1
+    global_transitions: tuple[Transition, ...] = ()
+    events: dict[str, Transition] = field(default_factory=dict)
+    submachines: dict[str, Submachine] = field(default_factory=dict)
 
 
 def _actions(data: Any, where: str) -> tuple[Action, ...]:
@@ -269,58 +292,91 @@ def _actions(data: Any, where: str) -> tuple[Action, ...]:
     return tuple(actions)
 
 
-def _transition(raw: Any, where: str, *, timeout=False) -> Transition:
-    allowed = {"goto", "actions"} if timeout else {"match", "re", "search", "when", "goto", "actions"}
+def _variables(raw: Any, where: str) -> dict[str, Any]:
+    if not isinstance(raw, dict) or len(raw) > MAX_VARIABLES:
+        raise MachineError(f"{where} must be a mapping with at most {MAX_VARIABLES} variables")
+    for key, val in raw.items():
+        _name(key, f"{where} variable")
+        _scalar(val, f"{where}.{key}")
+    return dict(raw)
+
+
+def _templates(raw: Any, where: str) -> dict[str, str]:
+    if not isinstance(raw, dict) or len(raw) > MAX_VARIABLES:
+        raise MachineError(f"{where} must be a bounded mapping")
+    for key, value in raw.items():
+        _name(key, f"{where} key")
+        if not isinstance(value, str) or len(value) > 256 or "\r" in value or "\n" in value:
+            raise MachineError(f"{where} templates must be single-line text")
+    return dict(raw)
+
+
+def _transition(raw: Any, where: str, *, timeout=False, prefix="") -> Transition:
+    allowed = ({"goto", "actions"} if timeout else
+               {"match", "re", "search", "when", "goto", "actions",
+                "call", "return_to", "with", "export"})
     value = _mapping(raw, where, allowed)
-    goto = _name(value.get("goto"), f"{where}.goto")
+    call = value.get("call")
+    if call is not None and timeout:
+        raise MachineError("timeout transitions cannot call submachines")
+    if call is not None:
+        _name(call, f"{where}.call")
+        if value.get("goto") is not None:
+            raise MachineError("call transitions use return_to, not goto")
+        target = _name(value.get("return_to"), f"{where}.return_to")
+        goto = prefix + target
+    else:
+        if any(k in value for k in ("return_to", "with", "export")):
+            raise MachineError("return_to/with/export require call")
+        goto = prefix + _name(value.get("goto"), f"{where}.goto")
     pattern = None
     regex = None
     if not timeout:
         pattern = value.get("match")
-        if not isinstance(pattern, str) or not pattern:
-            raise MachineError(f"{where}.match must be nonempty text")
+        if not isinstance(pattern, str) or not 0 < len(pattern) <= 512:
+            raise MachineError(f"{where}.match must be bounded nonempty text")
         if type(value.get("re", False)) is not bool or type(value.get("search", False)) is not bool:
             raise MachineError("re and search must be boolean")
         try:
             regex = compile_watch_pattern(pattern, use_regex=value.get("re", False))
         except ValueError as exc:
             raise MachineError(str(exc)) from exc
-    return Transition(goto=goto, pattern=pattern, regex=regex, search=value.get("search", False),
-                      use_regex=value.get("re", False),
-                      when=compile_condition(value.get("when")) if not timeout else None,
-                      actions=_actions(value.get("actions"), f"{where}.actions"))
+    return Transition(
+        goto=goto, pattern=pattern, regex=regex,
+        search=value.get("search", False), use_regex=value.get("re", False),
+        when=compile_condition(value.get("when")) if not timeout else None,
+        actions=_actions(value.get("actions"), f"{where}.actions"),
+        call=call,
+        return_to=goto if call else None,
+        inputs=_templates(value.get("with", {}), f"{where}.with") if call else {},
+        exports=_templates(value.get("export", {}), f"{where}.export") if call else {},
+    )
 
 
-def compile_machine(raw: Any) -> Definition:
-    root = _mapping(raw, "machine", {"name", "version", "scope", "initial", "variables", "states"})
-    if type(root.get("version")) is not int or root["version"] != 1:
-        raise MachineError("machine version must be 1")
-    name = _name(root.get("name"), "machine", MACHINE_NAME)
-    if root.get("scope", "character") != "character":
-        raise MachineError("only character scope is supported in v1")
-    initial = _name(root.get("initial"), "initial state")
-    values = root.get("variables", {})
-    if not isinstance(values, dict) or len(values) > MAX_VARIABLES:
-        raise MachineError("variables must be a small mapping")
-    for key, val in values.items():
-        _name(key, "variable")
-        _scalar(val, f"variable {key}")
-    definitions = root.get("states")
-    if not isinstance(definitions, dict) or not 1 <= len(definitions) <= MAX_STATES:
+def _parse_states(raw: Any, *, prefix: str = "") -> dict[str, State]:
+    if not isinstance(raw, dict) or not 1 <= len(raw) <= MAX_STATES:
         raise MachineError(f"states requires 1-{MAX_STATES} items")
     states = {}
-    for state_name, raw_state in definitions.items():
-        _name(state_name, "state")
-        obj = _mapping(raw_state, f"state {state_name}",
-                       {"final", "on_enter", "transitions", "timeout", "on_timeout"})
+    for label, raw_state in raw.items():
+        _name(label, "state")
+        name = prefix + label
+        obj = _mapping(raw_state, f"state {name}",
+                       {"final", "parent", "on_enter", "transitions",
+                        "timeout", "on_timeout", "retry"})
         final = obj.get("final", False)
         if type(final) is not bool:
-            raise MachineError(f"state {state_name}.final must be boolean")
+            raise MachineError(f"state {name}.final must be boolean")
+        parent = obj.get("parent")
+        if parent is not None:
+            parent = prefix + _name(parent, f"state {name}.parent")
+            if parent == name:
+                raise MachineError("a state cannot be its own parent")
         raw_transitions = obj.get("transitions", [])
         if not isinstance(raw_transitions, list) or len(raw_transitions) > MAX_TRANSITIONS:
-            raise MachineError(f"state {state_name} has too many transitions")
-        transitions = tuple(_transition(t, f"{state_name}.transition[{i}]")
-                            for i, t in enumerate(raw_transitions))
+            raise MachineError(f"state {name} has too many transitions")
+        transitions = tuple(
+            _transition(x, f"{name}.transition[{i}]", prefix=prefix)
+            for i, x in enumerate(raw_transitions))
         timeout = obj.get("timeout")
         timeout_seconds = None
         if timeout is not None:
@@ -332,19 +388,129 @@ def compile_machine(raw: Any) -> Definition:
         timeout_step = obj.get("on_timeout")
         if (timeout_seconds is None) != (timeout_step is None):
             raise MachineError("timeout and on_timeout must be specified together")
-        on_timeout = (_transition(timeout_step, f"{state_name}.on_timeout", timeout=True)
+        on_timeout = (_transition(timeout_step, f"{name}.on_timeout",
+                                  timeout=True, prefix=prefix)
                       if timeout_step is not None else None)
-        if final and (transitions or timeout_seconds is not None):
-            raise MachineError(f"final state {state_name} cannot have transitions or timeout")
-        states[state_name] = State(state_name, final, _actions(obj.get("on_enter"), "on_enter"),
-                                   transitions, timeout_seconds, on_timeout)
+        actions = _actions(obj.get("on_enter"), f"{name}.on_enter")
+        raw_retry = obj.get("retry")
+        retry_limit = 0
+        retry_backoff = 0.0
+        allow_send = False
+        if raw_retry is not None:
+            retry = _mapping(raw_retry, f"{name}.retry",
+                             {"max", "backoff", "allow_repeat_send"})
+            retry_limit = retry.get("max")
+            if type(retry_limit) is not int or not 1 <= retry_limit <= MAX_RETRIES:
+                raise MachineError(f"{name}.retry.max must be 1-{MAX_RETRIES}")
+            if timeout_seconds is None:
+                raise MachineError(f"{name}.retry requires timeout/on_timeout")
+            backoff = retry.get("backoff", "0s")
+            if not isinstance(backoff, str):
+                raise MachineError("retry.backoff must be a duration")
+            retry_backoff = duration(backoff)
+            if retry_backoff < 0 or retry_backoff > 60:
+                raise MachineError("retry.backoff must be 0-60s")
+            allow_send = retry.get("allow_repeat_send", False)
+            if type(allow_send) is not bool:
+                raise MachineError("retry.allow_repeat_send must be boolean")
+            if any(a.kind == "send" for a in actions) and not allow_send:
+                raise MachineError("retry of on_enter sends requires explicit allow_repeat_send")
+        if final and (transitions or timeout_seconds is not None or retry_limit):
+            raise MachineError(f"final state {name} cannot have transitions or timeout")
+        states[name] = State(name, final, actions, transitions, timeout_seconds,
+                             on_timeout, parent, retry_limit, retry_backoff, allow_send)
+    return states
+
+
+def compile_machine(raw: Any) -> Definition:
+    root = _mapping(raw, "machine", {
+        "name", "version", "scope", "initial", "variables", "states",
+        "global_transitions", "events", "submachines",
+    })
+    if type(root.get("version")) is not int or root["version"] != 1:
+        raise MachineError("machine version must be 1")
+    name = _name(root.get("name"), "machine", MACHINE_NAME)
+    if root.get("scope", "character") != "character":
+        raise MachineError("only character scope is supported in v1")
+    initial = _name(root.get("initial"), "initial state")
+    values = _variables(root.get("variables", {}), "variables")
+    states = _parse_states(root.get("states"))
     if initial not in states:
         raise MachineError("initial state does not exist")
+    machines_raw = root.get("submachines", {})
+    if not isinstance(machines_raw, dict) or len(machines_raw) > MAX_SUBMACHINES:
+        raise MachineError("too many submachines")
+    subs = {}
+    for subname, spec in machines_raw.items():
+        _name(subname, "submachine name")
+        obj = _mapping(spec, f"submachine {subname}", {"initial", "variables", "states"})
+        prefix = subname + "__"
+        sub_initial = prefix + _name(obj.get("initial"), f"{subname}.initial")
+        sub_states = _parse_states(obj.get("states"), prefix=prefix)
+        if sub_initial not in sub_states:
+            raise MachineError(f"submachine {subname} initial state missing")
+        if not any(x.final for x in sub_states.values()):
+            raise MachineError(f"submachine {subname} needs an explicit final return state")
+        if any(x in states for x in sub_states):
+            raise MachineError("duplicate submachine state key")
+        states.update(sub_states)
+        subs[subname] = Submachine(subname, sub_initial,
+                                   _variables(obj.get("variables", {}), f"{subname}.variables"))
+    if len(states) > MAX_STATES:
+        raise MachineError(f"compiled machine exceeds {MAX_STATES} states")
+    globals_raw = root.get("global_transitions", [])
+    if not isinstance(globals_raw, list) or len(globals_raw) > MAX_GLOBAL_TRANSITIONS:
+        raise MachineError("global_transitions must be bounded list")
+    globals_ = tuple(_transition(t, f"global_transitions[{i}]")
+                     for i, t in enumerate(globals_raw))
+    events_raw = root.get("events", {})
+    if not isinstance(events_raw, dict) or len(events_raw) > 3:
+        raise MachineError("events must be a small mapping")
+    if set(events_raw) - {"death", "disconnect", "stop"}:
+        raise MachineError("supported events are death, disconnect and stop")
+    events = {event: _transition(value, f"events.{event}", timeout=True)
+              for event, value in events_raw.items()}
+    # Hierarchies cannot escape into a different machine namespace.
     for state in states.values():
-        for transition in (*state.transitions, *((state.on_timeout,) if state.on_timeout else ())):
-            if transition.goto not in states:
-                raise MachineError(f"{state.name} refers to unknown state {transition.goto}")
-    return Definition(name, initial, dict(values), states)
+        seen = {state.name}
+        node = state
+        while node.parent is not None:
+            if node.parent not in states or node.parent in seen:
+                raise MachineError(f"invalid parent hierarchy for {state.name}")
+            seen.add(node.parent)
+            node = states[node.parent]
+        for t in (*state.transitions, *((state.on_timeout,) if state.on_timeout else ())):
+            if t.goto not in states or (not t.call and
+                    state.name.split("__")[0] != t.goto.split("__")[0]
+                    and ("__" in state.name or "__" in t.goto)):
+                raise MachineError(f"{state.name} refers to invalid state {t.goto}")
+            if t.call is not None:
+                if t.call not in subs:
+                    raise MachineError(f"unknown submachine: {t.call}")
+                target = subs[t.call]
+                if set(t.inputs) - set(target.variables):
+                    raise MachineError("submachine call inputs must be declared variables")
+                if set(t.exports) - set(target.variables):
+                    raise MachineError("submachine exports must be declared local variables")
+                for target_name in t.exports.values():
+                    _name(target_name, "export destination")
+        if state.retry_limit and state.parent is not None and state.timeout is None:
+            raise MachineError("retry requires state-local timeout")
+    for t in globals_:
+        if t.goto not in root["states"] and t.goto not in states:
+            raise MachineError(f"unknown global transition state: {t.goto}")
+        if "__" in t.goto:
+            raise MachineError("global transitions must target root states")
+        if t.call is not None:
+            raise MachineError("global transitions cannot call submachines")
+    for event, transition in events.items():
+        if "__" in transition.goto or transition.goto not in states:
+            raise MachineError("system events must target root states")
+        if any(a.kind == "send" for a in (
+            *transition.actions, *states[transition.goto].on_enter)):
+            raise MachineError("system events cannot dispatch MUD commands")
+    return Definition(name, initial, values, states, global_transitions=globals_,
+                      events=events, submachines=subs)
 
 
 def load_machine(path: str | Path) -> Definition:
@@ -375,45 +541,144 @@ class Decision:
     notifications: tuple[str, ...]
     cursor: int | None
     transition_index: int | None = None
+    transition_source: str | None = None
+    stack_depth: int = 0
+    retry_attempt: int = 0
 
 
 class MachineInstance:
-    """Pure deterministic interpreter. Does not transmit commands."""
+    """Pure, transactional interpreter with bounded hierarchical call frames."""
 
     def __init__(self, definition: Definition):
         self.definition = definition
         self.state: str | None = None
         self.variables = dict(definition.variables)
+        self.frames: list[dict[str, Any]] = []
+        self.retry_counts: dict[str, int] = {}
         self.status = "created"
         self.trace: list[Decision] = []
         self.partial = ""
 
+    def _context(self, captures: dict[str, Any] | None = None) -> dict[str, Any]:
+        values = dict(self.variables)
+        if self.frames:
+            values.update(self.frames[-1]["locals"])
+        values.update(captures or {})
+        return values
+
+    def timeout_state(self) -> State | None:
+        if self.state is None:
+            return None
+        node = self.definition.states[self.state]
+        while True:
+            if node.timeout is not None:
+                return node
+            if node.parent is None:
+                return None
+            node = self.definition.states[node.parent]
+
     def _commit(self, destination: str, actions: tuple[Action, ...], captures: dict[str, Any],
-                *, event: str, cursor: int | None,
-                transition_index: int | None = None) -> Decision:
-        next_state = self.definition.states[destination]
-        staged = {**self.variables, **captures}
+                *, event: str, cursor: int | None, transition_index: int | None = None,
+                transition: Transition | None = None,
+                transition_source: str | None = None,
+                retry_attempt: int = 0) -> Decision:
+        old_state = self.state
+        root = dict(self.variables)
+        frames = copy.deepcopy(self.frames)
+        counters = dict(self.retry_counts)
+        if transition_source == "*" and frames:
+            # Global safety transitions always exit nested submachines.
+            frames.clear()
+        if frames:
+            frames[-1]["locals"].update(captures)
+        else:
+            root.update(captures)
         commands: list[str] = []
         notifications: list[str] = []
-        for action in (*actions, *next_state.on_enter):
-            if action.kind == "set":
-                variable, template = next(iter(action.value.items()))
-                staged[variable] = expand(template, staged, send=False)
-            elif action.kind == "send":
-                commands.append(expand(action.value, staged, send=True))
-            else:
-                notifications.append(expand(action.value, staged, send=False))
+
+        def context() -> dict[str, Any]:
+            combined = dict(root)
+            if frames:
+                combined.update(frames[-1]["locals"])
+            return combined
+
+        def apply_actions(batch: tuple[Action, ...]) -> None:
+            for action in batch:
+                if action.kind == "set":
+                    key, template = next(iter(action.value.items()))
+                    value = expand(template, context(), send=False)
+                    if frames and (key in frames[-1]["locals"] or key not in root):
+                        frames[-1]["locals"][key] = value
+                    else:
+                        root[key] = value
+                elif action.kind == "send":
+                    commands.append(expand(action.value, context(), send=True))
+                else:
+                    notifications.append(expand(action.value, context(), send=False))
+                if len(commands) > MAX_ACTIONS:
+                    raise MachineError("too many commands in one transition")
+                if len(root) > MAX_VARIABLES or any(
+                    len(frame["locals"]) > MAX_VARIABLES for frame in frames
+                ):
+                    raise MachineError("machine variable bound exceeded")
+
+        apply_actions(actions)
+        if transition is not None and transition.call is not None:
+            if len(frames) >= MAX_CALL_DEPTH:
+                raise MachineError("submachine recursion limit exceeded")
+            sub = self.definition.submachines[transition.call]
+            args = {key: expand(value, context(), send=False)
+                    for key, value in transition.inputs.items()}
+            child_vars = {**sub.variables, **args}
+            frames.append({"name": sub.name, "return_to": transition.return_to,
+                           "locals": child_vars, "exports": dict(transition.exports)})
+            destination = sub.initial
+        elif frames and "__" not in destination:
+            # Explicit transition out of a submachine abandons its call stack.
+            frames.clear()
+
+        # A final submachine state returns to its named parent continuation.
+        # Automatic joins are bounded by the call stack; no recursive send.
+        while True:
+            target = self.definition.states[destination]
+            apply_actions(target.on_enter)
+            if not target.final or not frames:
+                break
+            finished = frames.pop()
+            values = finished["locals"]
+            for source, target_name in finished["exports"].items():
+                if source not in values:
+                    raise MachineError(f"missing submachine export: {source}")
+                if frames and (target_name in frames[-1]["locals"] or target_name not in root):
+                    frames[-1]["locals"][target_name] = values[source]
+                else:
+                    root[target_name] = values[source]
+            destination = finished["return_to"]
+            if destination not in self.definition.states:
+                raise MachineError("invalid submachine return target")
+        if old_state != destination:
+            counters.pop(old_state, None)
+            counters.pop(destination, None)
+        if retry_attempt:
+            counters[destination] = retry_attempt
         if len(commands) > MAX_ACTIONS:
-            raise MachineError("too many commands in one transition")
-        decision = Decision(self.state, destination, event, dict(captures), dict(staged),
-                            tuple(commands), tuple(notifications), cursor, transition_index)
+            raise MachineError("too many actions after submachine return")
+        if len(root) > MAX_VARIABLES or any(len(f["locals"]) > MAX_VARIABLES for f in frames):
+            raise MachineError("machine variable bound exceeded")
+        result = Decision(old_state, destination, event, dict(captures),
+                          {**root, **(frames[-1]["locals"] if frames else {})},
+                          tuple(commands), tuple(notifications), cursor,
+                          transition_index, transition_source, len(frames),
+                          retry_attempt)
         self.state = destination
-        self.variables = staged
-        self.status = "completed" if next_state.final else "running"
-        self.trace.append(decision)
+        self.variables = root
+        self.frames = frames
+        self.retry_counts = counters
+        self.status = "completed" if target.final and not frames else "running"
+        self.trace.append(result)
         if len(self.trace) > MAX_TRACE:
             del self.trace[:-MAX_TRACE]
-        return decision
+        return result
 
     def start(self) -> Decision:
         if self.status != "created":
@@ -424,32 +689,61 @@ class MachineInstance:
         if self.status != "running":
             return None
         clean = strip_ansi(line)[:MAX_LINE]
-        current = self.definition.states[self.state]
-        for index, transition in enumerate(current.transitions):
-            match = transition.regex.search(clean) if transition.search else transition.regex.match(clean)
-            if match is None:
-                continue
-            captures = {**{str(i): value for i, value in enumerate(match.groups(), 1)
-                           if value is not None},
-                        **{key: value for key, value in match.groupdict().items() if value is not None},
-                        "0": match.group(0)}
-            context = {**self.variables, **captures}
-            if not evaluate_condition(transition.when, context):
-                continue
-            return self._commit(transition.goto, transition.actions, captures,
-                                event="recv", cursor=cursor, transition_index=index)
+        hierarchy = []
+        node = self.definition.states[self.state]
+        while True:
+            hierarchy.append((node.name, node.transitions))
+            if node.parent is None:
+                break
+            node = self.definition.states[node.parent]
+        hierarchy.append(("*", self.definition.global_transitions))
+        for source, transitions in hierarchy:
+            for index, transition in enumerate(transitions):
+                match = (transition.regex.search(clean) if transition.search
+                         else transition.regex.match(clean))
+                if match is None:
+                    continue
+                captures = {
+                    **{str(i): value for i, value in enumerate(match.groups(), 1)
+                       if value is not None},
+                    **{key: value for key, value in match.groupdict().items()
+                       if value is not None},
+                    "0": match.group(0),
+                }
+                if not evaluate_condition(transition.when, self._context(captures)):
+                    continue
+                return self._commit(
+                    transition.goto, transition.actions, captures, event="recv",
+                    cursor=cursor, transition_index=index, transition=transition,
+                    transition_source=source)
         return None
 
     def timeout(self, *, cursor: int | None = None) -> Decision | None:
         if self.status != "running":
             return None
-        transition = self.definition.states[self.state].on_timeout
+        state = self.timeout_state()
+        if state is None or state.on_timeout is None:
+            return None
+        attempts = self.retry_counts.get(self.state, 0)
+        if state.name == self.state and attempts < state.retry_limit:
+            return self._commit(self.state, (), {}, event="retry",
+                                cursor=cursor, transition_source=state.name,
+                                retry_attempt=attempts + 1)
+        return self._commit(state.on_timeout.goto, state.on_timeout.actions, {},
+                            event="timeout", cursor=cursor,
+                            transition_source=state.name)
+
+    def signal(self, event: str, *, cursor: int | None = None) -> Decision | None:
+        """Explicit system event; send-free by compile-time contract."""
+        if self.status != "running":
+            return None
+        transition = self.definition.events.get(event)
         if transition is None:
             return None
-        return self._commit(transition.goto, transition.actions, {}, event="timeout", cursor=cursor)
+        return self._commit(transition.goto, transition.actions, {}, event=event,
+                            cursor=cursor, transition_source="event:" + event)
 
     def feed(self, chunk: str, *, cursor: int | None = None) -> list[Decision]:
-        """Match completed incoming lines only; never interpret partial chunks."""
         if not isinstance(chunk, str):
             raise MachineError("incoming data must be text")
         text = (self.partial + chunk).replace("\r\n", "\n").replace("\r", "\n")
@@ -514,6 +808,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("operation", choices=[
         "load", "list", "start", "status", "pause", "resume",
         "stop", "inspect", "trace", "step", "recover",
+        "diagnose", "set", "signal",
     ])
     parser.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)

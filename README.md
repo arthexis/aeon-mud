@@ -900,3 +900,102 @@ text, highlights visited edges by count, and highlights the final state.
 **Stage 5 is for deterministic analysis, not live acceptance.**
 Hierarchical states, reusable submachines, and final live/deploy acceptance
 are tracked separately in issue #53.
+
+
+### Hierarchical machines and reusable submachines (Stage 6)
+
+The v1 YAML schema remains backward compatible and optionally supports
+parent-state transitions, global transitions, controlled system events,
+scoped submachine calls and bounded timeout retries:
+
+```yaml
+name: expedition
+version: 1
+initial: idle
+variables: {item: sword, price: "0"}
+states:
+  idle:
+    transitions:
+      - match: "Welcome to my shop"
+        call: quote
+        return_to: reviewing
+        with: {item: "{item}"}
+        export: {price: price}
+  common:
+    transitions:
+      - match: "A guard warns [warning]"
+        goto: leaving
+  reviewing:
+    parent: common
+    transitions:
+      - match: "Confirm purchase"
+        goto: leaving
+  leaving: {final: true}
+  dead: {final: true}
+  offline: {final: true}
+  stopped: {final: true}
+global_transitions:
+  - match: "You are dead"
+    goto: dead
+events:
+  death: {goto: dead}
+  disconnect: {goto: offline}
+  stop: {goto: stopped}
+submachines:
+  quote:
+    initial: waiting
+    variables: {item: "", price: "0"}
+    states:
+      waiting:
+        timeout: 2s
+        retry: {max: 2, backoff: 1s}
+        on_timeout: {goto: failed}
+        transitions:
+          - match: "The [item] costs [price] coins"
+            goto: done
+      done: {final: true}
+      failed: {final: true}
+```
+
+See `examples/expedition.machine.yaml` for a complete executable fixture.
+Child-state transitions take precedence over inherited parent transitions;
+global matchers are evaluated last. A global transition abandons any nested
+submachine stack. `call` requires a named `return_to` state and passes
+only declared local inputs. When a submachine reaches a final state, it
+joins its caller through the declared return path; only explicitly exported
+variables escape the local scope. The call stack has a maximum depth of
+four, including recursive calls.
+
+Per-state `retry` applies only to explicit timeout events. There can be
+at most three automatic retries with a bounded backoff of 0–60 seconds.
+Repeating `on_enter` actions that send MUD commands is rejected by default;
+an author must explicitly opt in with `allow_repeat_send: true` and accept
+that a non-idempotent command could execute more than once. A disconnected
+or ambiguously delivered command **never** triggers an automatic retry.
+
+System `disconnect` and `stop` handlers cannot send MUD commands. Session
+disconnect still forces `recovery_required` and an operator decision;
+a stop ends the instance. To signal a death event explicitly, pause the
+instance first and run `//machine signal ID death` (no outbound commands).
+
+Operator and observation commands:
+
+```text
+//machine diagnose
+//machine diagnose sm-INSTANCE
+//machine pause sm-INSTANCE
+//machine set sm-INSTANCE max_price 100
+//machine signal sm-INSTANCE death
+//machine resume sm-INSTANCE
+```
+
+`diagnose` reports a bounded, redacted hierarchy, active submachine stack,
+retry budget, timeout and latest receipt. `set` changes an existing variable
+only while paused without pending sends, persists an audit receipt, and does
+not automatically dispatch actions. The same commands are exposed through
+`aeon-machine CHARACTER diagnose|set|signal ...` over the owner-only
+Puppet socket. State-machine stack and retry counters are included in the
+durable recovery ledger; recovery never silently resumes a nested machine.
+
+**Safety boundary:** advanced machines are opt-in and disabled by default
+until explicitly loaded/started; no new network service or shell execution.
