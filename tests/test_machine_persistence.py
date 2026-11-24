@@ -335,5 +335,21 @@ class DurableMachineTests(unittest.TestCase):
             self.assertEqual(self.bridge.status(run["id"])["status"], "stopped")
 
 
+    def test_corrupted_ledger_disables_machine_without_memory_only_fallback(self):
+        store = self.bridge.store
+        store.ledger.write_text(store.ledger.read_text().replace('"definitions":', '"bad_defs":'))
+        self.bridge.close()
+        disabled = MachineBridge()
+        with self.assertRaises(DurableMachineError):
+            disabled.attach(journal=self.journal, character="Hero",
+                            profile=self.profile, store_root=self.root / "machine")
+        self.assertIn("persistence_error", disabled.list())
+        with self.assertRaisesRegex(MachineError, "automation disabled"):
+            disabled.load(str(FIXTURE))
+        with self.assertRaisesRegex(MachineError, "automation disabled"):
+            disabled.start("merchant")
+        disabled.close()
+
+
 if __name__ == "__main__":
     unittest.main()
