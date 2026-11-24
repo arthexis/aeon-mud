@@ -64,6 +64,10 @@ def install(source: Path, sha: str, root: Path, executable: Path, *, adopt_legac
     expected_executable = root / "current" / "aeon-mud.pyz"
     legacy_target = root / "venv" / "bin" / "aeon-mud"
     legacy_backup = root / "legacy-entry"
+    operators = {
+        name: executable.with_name(name)
+        for name in ("aeon-puppet", "aeon-machine")
+    }
     adopting = False
 
     if (source / "aeon_mud").is_symlink() or (source / "aeon_mud_client.py").is_symlink():
@@ -93,6 +97,15 @@ def install(source: Path, sha: str, root: Path, executable: Path, *, adopt_legac
                 raise RuntimeError("cannot adopt a legacy CLI over an existing release pointer")
             adopting = True
 
+    # Operator entrypoints are the same reviewed zipapp with argv0-based
+    # dispatch; never take over unmanaged executables or links.
+    for name, alias in operators.items():
+        if alias.exists() or alias.is_symlink():
+            if not alias.is_symlink() or alias.readlink() != expected_executable:
+                raise RuntimeError(f"refusing to replace unmanaged {name} executable")
+            if alias.lstat().st_uid != os.getuid():
+                raise RuntimeError(f"unowned {name} executable")
+
     releases.mkdir(parents=True, exist_ok=True)
     executable.parent.mkdir(parents=True, exist_ok=True)
     if not artifact.exists():
@@ -104,7 +117,16 @@ def install(source: Path, sha: str, root: Path, executable: Path, *, adopt_legac
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             shutil.copy2(source / "aeon_mud_client.py", staging / "aeon_mud_client.py")
             (staging / "__main__.py").write_text(
-                "from aeon_mud.cli import main\nraise SystemExit(main())\n",
+                "from pathlib import Path\n"
+                "import sys\n"
+                "name = Path(sys.argv[0]).name\n"
+                "if name == 'aeon-machine':\n"
+                "    from aeon_mud.machines import main\n"
+                "elif name == 'aeon-puppet':\n"
+                "    from aeon_mud.puppet import main\n"
+                "else:\n"
+                "    from aeon_mud.cli import main\n"
+                "raise SystemExit(main())\n",
                 encoding="utf-8",
             )
             zipapp.create_archive(staging, target=staging.parent / (sha + ".pyz"),
@@ -128,6 +150,7 @@ def install(source: Path, sha: str, root: Path, executable: Path, *, adopt_legac
     # change to the active entry. The virtual environment itself is untouched.
     if adopting:
         legacy_backup.symlink_to(legacy_target)
+    created_operators = []
     try:
         if executable_missing or adopting:
             replace_symlink(executable, expected_executable)
@@ -135,7 +158,16 @@ def install(source: Path, sha: str, root: Path, executable: Path, *, adopt_legac
             replace_symlink(current, target)
         subprocess.run([str(executable), "--help"], check=True, timeout=30,
                        stdout=subprocess.DEVNULL)
+        for name, alias in operators.items():
+            if not alias.is_symlink():
+                replace_symlink(alias, expected_executable)
+                created_operators.append(alias)
+            subprocess.run([str(alias), "--help"], check=True, timeout=30,
+                           stdout=subprocess.DEVNULL)
     except Exception:
+        for alias in reversed(created_operators):
+            if alias.is_symlink() and alias.readlink() == expected_executable:
+                alias.unlink()
         if old is not None:
             replace_symlink(current, old)
         elif current.is_symlink():
@@ -149,7 +181,7 @@ def install(source: Path, sha: str, root: Path, executable: Path, *, adopt_legac
         raise
     if old is not None and old != target:
         replace_symlink(previous, old)
-    return sha, old != target or executable_missing or adopting
+    return sha, old != target or executable_missing or adopting or bool(created_operators)
 
 
 def main() -> int:

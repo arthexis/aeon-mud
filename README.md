@@ -169,8 +169,12 @@ per-node deployment authorization checks. The owner installer independently
 verifies source SHA and a clean tracked tree, assembles a dependency-free
 zipapp, checks its `--help`, and atomically activates
 `~/.local/share/aeon-mud/current` with the last release in `previous`.
-The managed command is `~/.local/bin/aeon-mud`. An unrelated existing command
-is never overwritten. Release evidence is a full-SHA directory, verified
+The managed commands are `~/.local/bin/aeon-mud`,
+`~/.local/bin/aeon-machine` and `~/.local/bin/aeon-puppet`. They are
+owner-managed symlinks to the same pinned zipapp, which dispatches according
+to the command name. Existing unrelated executables or symlinks are never
+overwritten. The installer verifies all three entrypoints and rolls back
+newly created operator links if activation fails. Release evidence is a full-SHA directory, verified
 through the active executable link, not an attempt journal. Running the
 same SHA is idempotent. No root privileges, daemon, external credentials,
 auto-login, system service, or SSH management are introduced.

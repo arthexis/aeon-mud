@@ -41,3 +41,13 @@
       - "{{ ansible_env.HOME }}/.local/bin/aeon-mud"
       - --help
   changed_when: false
+
+- name: Verify the Machine and Puppet operator commands
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_env.HOME }}/.local/bin/{{ item }}"
+      - --help
+  loop:
+    - aeon-machine
+    - aeon-puppet
+  changed_when: false
