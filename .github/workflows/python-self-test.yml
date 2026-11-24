@@ -33,6 +33,12 @@ jobs:
           python -m build --wheel --no-isolation
           python -m pip install dist/*.whl
           aeon-mud self-test
+      - name: Installed machine CLI offline acceptance
+        run: |
+          aeon-machine validate examples/expedition.machine.yaml
+          aeon-machine diagram examples/expedition.machine.yaml
+          aeon-machine replay examples/merchant.machine.yaml examples/merchant.replay.jsonl
+          aeon-machine replay examples/merchant.machine.yaml examples/merchant.replay.jsonl --diagram
 
   windows-terminal:
     runs-on: windows-latest
@@ -83,6 +89,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Batch self-test failed" }
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\aeon-mud.ps1" self-test
           if ($LASTEXITCODE -ne 0) { throw "PowerShell self-test failed" }
+      - name: Windows machine replay smoke (no network)
+        shell: powershell
+        run: |
+          python -m pip install "PyYAML>=6.0,<7"
+          python -m aeon_mud.machines validate examples/expedition.machine.yaml
+          if ($LASTEXITCODE -ne 0) { throw "Machine validation failed" }
+          python -m aeon_mud.machines diagram examples/expedition.machine.yaml
+          if ($LASTEXITCODE -ne 0) { throw "Mermaid generation failed" }
+          python -m aeon_mud.machines replay examples/merchant.machine.yaml examples/merchant.replay.jsonl
+          if ($LASTEXITCODE -ne 0) { throw "Windows replay failed" }
       - name: Ensure obsolete launchers do not return
         shell: powershell
         run: |
