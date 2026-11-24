@@ -254,18 +254,18 @@ class MachineStore:
                         raise DurableMachineError("machine ledger exceeds size limit")
                     if length:
                         reader.seek(-1, os.SEEK_END)
-                        if reader.read(1) != b"\\n":
+                        if reader.read(1) != b"\n":
                             start = max(0, length - MAX_ENTRY - 1)
                             reader.seek(start)
                             trailing = reader.read()
-                            pos = trailing.rfind(b"\\n")
+                            pos = trailing.rfind(b"\n")
                             good_end = start + pos + 1 if pos >= 0 else 0
                             if (good_end == 0) != (self.sequence == 0):
                                 raise DurableMachineError("machine ledger has an unverified tail")
                             if good_end:
                                 reader.seek(max(0, good_end - MAX_ENTRY - 1))
                                 verified_tail = reader.read(good_end - reader.tell())
-                                final = verified_tail.rstrip(b"\\n").split(b"\\n")[-1]
+                                final = verified_tail.rstrip(b"\n").split(b"\n")[-1]
                                 try:
                                     prior = json.loads(final)
                                     if prior["seq"] != self.sequence or prior["checksum"] != self.last_checksum:
